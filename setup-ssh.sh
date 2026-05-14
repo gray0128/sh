@@ -7,6 +7,10 @@ MANAGED_CONFIG="$SSHD_CONFIG_DIR/00-vps-ssh-setup.conf"
 BACKUP_DIR="/root/ssh-setup-backups"
 SUPPORTS_KBD_INTERACTIVE="n"
 SUPPORTS_CHALLENGE_RESPONSE="n"
+LAST_BACKUP_FILE=""
+LAST_BACKUP_HAD_FILE=""
+MAIN_CONFIG_BACKUP=""
+MANAGED_CONFIG_BACKUP=""
 
 log() {
   printf '\033[1;32m[INFO]\033[0m %s\n' "$*"
@@ -230,12 +234,15 @@ detect_sshd_keyword_support() {
 ensure_backup() {
   local stamp
 
-  stamp="$(date +%Y%m%d%H%M%S)"
+  stamp="$(date +%Y%m%d%H%M%S).$$"
   mkdir -p "$BACKUP_DIR"
-  cp -a "$SSHD_CONFIG" "$BACKUP_DIR/sshd_config.$stamp"
+  MAIN_CONFIG_BACKUP="$BACKUP_DIR/sshd_config.$stamp"
+  MANAGED_CONFIG_BACKUP=""
+  cp -a "$SSHD_CONFIG" "$MAIN_CONFIG_BACKUP"
 
   if [ -f "$MANAGED_CONFIG" ]; then
-    cp -a "$MANAGED_CONFIG" "$BACKUP_DIR/00-vps-ssh-setup.conf.$stamp"
+    MANAGED_CONFIG_BACKUP="$BACKUP_DIR/00-vps-ssh-setup.conf.$stamp"
+    cp -a "$MANAGED_CONFIG" "$MANAGED_CONFIG_BACKUP"
   fi
 
   log "已备份 SSH 配置到 $BACKUP_DIR"
@@ -246,18 +253,19 @@ backup_file_if_exists() {
   local label="$2"
   local stamp
 
-  [ -e "$file" ] || return 0
+  LAST_BACKUP_FILE=""
+  LAST_BACKUP_HAD_FILE=""
+  if [ ! -e "$file" ]; then
+    LAST_BACKUP_HAD_FILE="n"
+    return 0
+  fi
 
-  stamp="$(date +%Y%m%d%H%M%S)"
+  stamp="$(date +%Y%m%d%H%M%S).$$"
   mkdir -p "$BACKUP_DIR"
-  cp -a "$file" "$BACKUP_DIR/${label}.${stamp}"
+  cp -a "$file" "$BACKUP_DIR/${label}.${stamp}" || return 1
+  LAST_BACKUP_FILE="$BACKUP_DIR/${label}.${stamp}"
+  LAST_BACKUP_HAD_FILE="y"
   log "已备份 $file 到 $BACKUP_DIR/${label}.${stamp}"
-}
-
-latest_backup_for_label() {
-  local label="$1"
-
-  ls -t "$BACKUP_DIR/${label}".* 2>/dev/null | head -n 1 || true
 }
 
 write_file_atomic() {
@@ -352,6 +360,8 @@ verify_effective_config() {
   local restrict_users="$8"
   local allow_users="$9"
   local effective
+  local expected
+  local user
 
   if [ "$rotate_key" = "y" ]; then
     effective="$(effective_sshd_option "$sshd_bin" "pubkeyauthentication")"
@@ -388,14 +398,44 @@ verify_effective_config() {
       warn "PasswordAuthentication 未按预期生效，当前有效值：${effective:-unknown}"
       return 1
     fi
+
+    if [ "$SUPPORTS_KBD_INTERACTIVE" = "y" ]; then
+      effective="$(effective_sshd_option "$sshd_bin" "kbdinteractiveauthentication")"
+      if [ "$effective" != "no" ]; then
+        warn "KbdInteractiveAuthentication 未按预期生效，当前有效值：${effective:-unknown}"
+        return 1
+      fi
+    fi
+
+    if [ "$SUPPORTS_CHALLENGE_RESPONSE" = "y" ]; then
+      effective="$(effective_sshd_option "$sshd_bin" "challengeresponseauthentication")"
+      if [ "$effective" != "no" ]; then
+        warn "ChallengeResponseAuthentication 未按预期生效，当前有效值：${effective:-unknown}"
+        return 1
+      fi
+    fi
   fi
 
   if [ "$restrict_users" = "y" ]; then
     effective="$(effective_sshd_option "$sshd_bin" "allowusers")"
-    [ -n "$effective" ] || {
+    expected="$(normalize_user_list "$allow_users")"
+    effective="$(normalize_user_list "$effective")"
+    if [ -z "$effective" ]; then
       warn "AllowUsers 未按预期生效，当前未检测到有效值。"
       return 1
-    }
+    fi
+
+    if [ "$effective" != "$expected" ]; then
+      warn "AllowUsers 与预期不一致，预期：$expected，当前有效值：$effective"
+      return 1
+    fi
+
+    for user in $allow_users; do
+      if [[ " $effective " != *" $user "* ]]; then
+        warn "AllowUsers 未包含预期用户 $user，当前有效值：$effective"
+        return 1
+      fi
+    done
   fi
 }
 
@@ -408,6 +448,89 @@ validate_user_list() {
     validate_username "$user" || return 1
     id "$user" >/dev/null 2>&1 || return 1
   done
+}
+
+normalize_user_list() {
+  local users="$1"
+  local user
+  local normalized=""
+
+  for user in $users; do
+    normalized="${normalized:+$normalized }$user"
+  done
+  printf '%s' "$normalized"
+}
+
+validate_path_owner_and_mode() {
+  local path="$1"
+  local expected_uid="$2"
+  local label="$3"
+  local owner_uid
+  local mode
+
+  owner_uid="$(stat -c '%u' "$path")" || return 1
+  mode="$(stat -c '%a' "$path")" || return 1
+
+  if [ "$owner_uid" != "$expected_uid" ] && [ "$owner_uid" != "0" ]; then
+    warn "$label 的所有者不是目标用户或 root：$path"
+    return 1
+  fi
+
+  if (( (8#$mode & 022) != 0 )); then
+    warn "$label 存在 group/world 可写权限：$path"
+    return 1
+  fi
+}
+
+verify_authorized_keys_file_support() {
+  local sshd_bin="$1"
+  local configured
+  local item
+
+  configured="$(effective_sshd_option "$sshd_bin" "authorizedkeysfile")"
+  [ -n "$configured" ] || configured=".ssh/authorized_keys"
+
+  for item in $configured; do
+    case "$item" in
+      .ssh/authorized_keys|%h/.ssh/authorized_keys)
+        return 0
+        ;;
+    esac
+  done
+
+  warn "当前 sshd AuthorizedKeysFile 为：$configured"
+  warn "脚本只会安全替换默认路径 .ssh/authorized_keys。"
+  return 1
+}
+
+port_is_listening() {
+  local port="$1"
+
+  command -v ss >/dev/null 2>&1 || return 1
+  ss -H -ltn 2>/dev/null | awk -v port="$port" '
+    {
+      split($4, addr, ":")
+      if (addr[length(addr)] == port) {
+        found = 1
+      }
+    }
+    END { exit found ? 0 : 1 }
+  '
+}
+
+ensure_port_available() {
+  local port="$1"
+
+  if ! command -v ss >/dev/null 2>&1; then
+    warn "未找到 ss，无法自动检查端口占用。"
+    prompt_yes_no "是否确认继续使用端口 $port？" "n"
+    return
+  fi
+
+  if port_is_listening "$port"; then
+    warn "端口 $port 当前已有进程监听。"
+    return 1
+  fi
 }
 
 write_managed_config() {
@@ -589,29 +712,67 @@ restore_managed_config() {
 replace_authorized_keys() {
   local target_user="$1"
   local public_key="$2"
+  local sshd_bin="$3"
   local home_dir
   local ssh_dir
   local auth_file
+  local target_uid
 
-  home_dir="$(getent passwd "$target_user" | cut -d: -f6)"
-  [ -n "$home_dir" ] || die "无法获取用户 $target_user 的 home 目录。"
+  LAST_BACKUP_FILE=""
+  LAST_BACKUP_HAD_FILE=""
+
+  verify_authorized_keys_file_support "$sshd_bin" || return 1
+
+  home_dir="$(getent passwd "$target_user" | cut -d: -f6)" || return 1
+  [ -n "$home_dir" ] || {
+    warn "无法获取用户 $target_user 的 home 目录。"
+    return 1
+  }
+  target_uid="$(id -u "$target_user")" || return 1
+
+  if [ -L "$home_dir" ] || [ ! -d "$home_dir" ]; then
+    warn "$target_user 的 home 目录不是普通目录，或是符号链接：$home_dir"
+    return 1
+  fi
+  validate_path_owner_and_mode "$home_dir" "$target_uid" "home 目录" || return 1
 
   ssh_dir="$home_dir/.ssh"
   auth_file="$ssh_dir/authorized_keys"
 
-  mkdir -p "$ssh_dir"
-  chmod 700 "$ssh_dir"
-  backup_file_if_exists "$auth_file" "authorized_keys.${target_user}"
+  if [ -L "$ssh_dir" ]; then
+    warn "$ssh_dir 是符号链接，拒绝以 root 身份写入。"
+    return 1
+  fi
+  if [ -e "$ssh_dir" ] && [ ! -d "$ssh_dir" ]; then
+    warn "$ssh_dir 已存在但不是目录。"
+    return 1
+  fi
+  if [ -L "$auth_file" ]; then
+    warn "$auth_file 是符号链接，拒绝写入。"
+    return 1
+  fi
+  if [ -e "$auth_file" ] && [ ! -f "$auth_file" ]; then
+    warn "$auth_file 已存在但不是普通文件。"
+    return 1
+  fi
 
-  printf '%s\n' "$public_key" | write_file_atomic "$auth_file" 600
+  mkdir -p "$ssh_dir" || return 1
+  chown "$target_user:" "$ssh_dir" || return 1
+  chmod 700 "$ssh_dir" || return 1
+  validate_path_owner_and_mode "$ssh_dir" "$target_uid" ".ssh 目录" || return 1
 
-  chown "$target_user:" "$ssh_dir" "$auth_file"
+  backup_file_if_exists "$auth_file" "authorized_keys.${target_user}" || return 1
+
+  printf '%s\n' "$public_key" | write_file_atomic "$auth_file" 600 || return 1
+
+  chown "$target_user:" "$ssh_dir" "$auth_file" || return 1
   log "已替换 $auth_file：仅保留本次输入的新公钥。"
 }
 
 restore_authorized_keys() {
   local target_user="$1"
   local backup_file="$2"
+  local had_file="$3"
   local home_dir
   local ssh_dir
   local auth_file
@@ -624,15 +785,17 @@ restore_authorized_keys() {
   ssh_dir="$home_dir/.ssh"
   auth_file="$ssh_dir/authorized_keys"
 
-  if [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
+  if [ "$had_file" = "y" ] && [ -n "$backup_file" ] && [ -f "$backup_file" ]; then
     cp -a "$backup_file" "$auth_file"
     chown "$target_user:" "$ssh_dir" "$auth_file"
     chmod 700 "$ssh_dir"
     chmod 600 "$auth_file"
     warn "已恢复 $auth_file"
-  else
+  elif [ "$had_file" = "n" ]; then
     rm -f "$auth_file"
     warn "已移除新生成的 $auth_file"
+  else
+    warn "未找到本次 authorized_keys 备份，无法自动恢复：$auth_file"
   fi
 }
 
@@ -701,8 +864,24 @@ test_sshd_config() {
 reload_ssh_service() {
   local service="$1"
 
-  systemctl reload "$service"
+  systemctl reload "$service" || return 1
   log "已重载 ${service} 服务。"
+}
+
+restore_config_and_reload() {
+  local sshd_bin="$1"
+  local service="$2"
+  local main_backup="$3"
+  local managed_backup="$4"
+
+  restore_config_files "$main_backup" "$managed_backup"
+  if test_sshd_config "$sshd_bin" && reload_ssh_service "$service"; then
+    warn "已重新加载恢复后的 SSH 配置。"
+    return 0
+  fi
+
+  warn "已恢复配置文件，但重新加载恢复配置失败；请保持当前会话并人工检查 SSH 服务。"
+  return 1
 }
 
 main() {
@@ -724,6 +903,7 @@ main() {
   local managed_backup=""
   local main_backup=""
   local auth_backup=""
+  local auth_had_file="n"
 
   need_root
   show_intro
@@ -765,7 +945,7 @@ main() {
     modify_port="y"
     while true; do
       ssh_port="$(prompt "请输入新的 SSH 端口" "22222")"
-      if validate_ssh_port "$ssh_port"; then
+      if validate_ssh_port "$ssh_port" && ensure_port_available "$ssh_port"; then
         break
       fi
       warn "端口必须是 1024-65535 的数字，并建议避开已被其他服务占用的端口。"
@@ -811,39 +991,61 @@ main() {
     enable_hardening="y"
   fi
 
-  ensure_backup
-  main_backup="$(ls -t "$BACKUP_DIR"/sshd_config.* 2>/dev/null | head -n 1 || true)"
-  [ -f "$MANAGED_CONFIG" ] && managed_backup="$BACKUP_DIR/managed.before.$(date +%Y%m%d%H%M%S)"
-  [ -n "$managed_backup" ] && cp -a "$MANAGED_CONFIG" "$managed_backup"
-  ensure_include_enabled
-  write_managed_config "$rotate_key" "$modify_port" "$ssh_port" "$disable_root_password" "$disable_root_key" "$disable_password_auth" "$restrict_users" "$allow_users" "$enable_hardening"
+  ensure_backup || die "备份 SSH 配置失败，已退出。"
+  main_backup="$MAIN_CONFIG_BACKUP"
+  managed_backup="$MANAGED_CONFIG_BACKUP"
+
+  if ! ensure_include_enabled; then
+    restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
+    die "启用 sshd_config.d Include 失败，已尝试恢复 SSH 配置。"
+  fi
+
+  if ! write_managed_config "$rotate_key" "$modify_port" "$ssh_port" "$disable_root_password" "$disable_root_key" "$disable_password_auth" "$restrict_users" "$allow_users" "$enable_hardening"; then
+    restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
+    die "写入受控 SSH 配置失败，已尝试恢复 SSH 配置。"
+  fi
 
   if ! test_sshd_config "$sshd_bin"; then
-    restore_config_files "$main_backup" "$managed_backup"
+    restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
     die "sshd 配置语法检查失败，已恢复 SSH 配置。请检查 $BACKUP_DIR 中的备份。"
   fi
 
   if ! verify_effective_config "$sshd_bin" "$rotate_key" "$modify_port" "$ssh_port" "$disable_root_password" "$disable_root_key" "$disable_password_auth" "$restrict_users" "$allow_users"; then
-    restore_config_files "$main_backup" "$managed_backup"
+    restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
     die "sshd 最终有效配置未通过校验，已恢复 SSH 配置。请检查 Include 顺序和已有全局配置。"
   fi
 
   if ! configure_firewall "$firewall_ports"; then
-    restore_config_files "$main_backup" "$managed_backup"
+    restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
     die "防火墙配置失败，已恢复 SSH 配置。请检查防火墙状态。"
   fi
 
   if [ "$rotate_key" = "y" ]; then
-    replace_authorized_keys "$target_user" "$public_key"
-    auth_backup="$(latest_backup_for_label "authorized_keys.${target_user}")"
+    if ! replace_authorized_keys "$target_user" "$public_key" "$sshd_bin"; then
+      auth_backup="$LAST_BACKUP_FILE"
+      auth_had_file="$LAST_BACKUP_HAD_FILE"
+      restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
+      [ -n "$auth_had_file" ] && restore_authorized_keys "$target_user" "$auth_backup" "$auth_had_file"
+      die "替换 authorized_keys 失败，已尝试恢复 SSH 配置和密钥文件。"
+    fi
+    auth_backup="$LAST_BACKUP_FILE"
+    auth_had_file="$LAST_BACKUP_HAD_FILE"
   fi
 
   if ! reload_ssh_service "$ssh_service"; then
-    restore_config_files "$main_backup" "$managed_backup"
+    restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
     if [ "$rotate_key" = "y" ]; then
-      restore_authorized_keys "$target_user" "$auth_backup"
+      restore_authorized_keys "$target_user" "$auth_backup" "$auth_had_file"
     fi
     die "SSH 服务重载失败，已恢复 SSH 配置。请检查服务状态。"
+  fi
+
+  if [ "$modify_port" = "y" ] && command -v ss >/dev/null 2>&1 && ! port_is_listening "$ssh_port"; then
+    restore_config_and_reload "$sshd_bin" "$ssh_service" "$main_backup" "$managed_backup" || true
+    if [ "$rotate_key" = "y" ]; then
+      restore_authorized_keys "$target_user" "$auth_backup" "$auth_had_file"
+    fi
+    die "未检测到 SSH 新端口 $ssh_port 正在监听，已恢复 SSH 配置。"
   fi
 
   printf '\n完成。\n'
