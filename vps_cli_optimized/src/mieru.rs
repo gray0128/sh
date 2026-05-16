@@ -1,11 +1,17 @@
 use clap::{Arg, ArgAction, ArgMatches, Command};
-use dialoguer::Input;
+use dialoguer::{Input, Select};
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
+use std::env;
 use std::fs;
+use std::io::Cursor;
+use std::net::IpAddr;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as SysCmd;
+use tar::Archive;
 
 use crate::safety::{
     append_backup, backup_path, current_timestamp, ensure_dir, is_interactive,
@@ -18,6 +24,8 @@ const MIERU_NODES_FILE: &str = "/etc/mieru-managed/nodes.json";
 const MIERU_LINKS_FILE: &str = "/etc/mieru-managed/links.txt";
 const MIERU_CONFIG_FILE: &str = "/etc/mieru-managed/mita_config.json";
 const MIERU_BACKUP_DIR: &str = "/root/mieru-managed-backups";
+const MIERU_CLIENT_HELPER_VERSION: &str = "3.32.0";
+const MIERU_CLIENT_HELPER_DIR: &str = "/tmp/vps-cli-mieru-helper";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MieruNode {
@@ -128,7 +136,39 @@ pub fn cli() -> Command {
         .subcommand(Command::new("list-nodes").about("查看节点，安全视图"))
         .subcommand(
             Command::new("show-links")
-                .about("查看敏感链接和客户端 JSON")
+                .about("兼容入口：查看 simple 链接和客户端 JSON")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("TAG")
+                        .help("仅查看指定标签"),
+                )
+                .arg(
+                    Arg::new("show-secrets")
+                        .long("show-secrets")
+                        .action(ArgAction::SetTrue)
+                        .help("确认展示敏感信息"),
+                ),
+        )
+        .subcommand(
+            Command::new("show-simple-links")
+                .about("查看 simple 分享链接 mierus://")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("TAG")
+                        .help("仅查看指定标签"),
+                )
+                .arg(
+                    Arg::new("show-secrets")
+                        .long("show-secrets")
+                        .action(ArgAction::SetTrue)
+                        .help("确认展示敏感信息"),
+                ),
+        )
+        .subcommand(
+            Command::new("show-standard-links")
+                .about("查看标准分享链接 mieru://")
                 .arg(
                     Arg::new("id")
                         .long("id")
@@ -165,6 +205,8 @@ pub fn handle_mieru(
         Some(("add-node", sub)) => add_node(sub, format, no_input),
         Some(("list-nodes", _)) => list_nodes(format),
         Some(("show-links", sub)) => show_links(sub, format, no_input),
+        Some(("show-simple-links", sub)) => show_simple_links(sub, format),
+        Some(("show-standard-links", sub)) => show_standard_links(sub, format),
         Some(("status", _)) => mita_status(format),
         Some(("start", _)) => mita_action("start", format),
         Some(("stop", _)) => mita_action("stop", format),
@@ -251,17 +293,7 @@ fn add_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Resul
         "请输入 mita 监听端口",
         interactive,
     )?)?;
-    let protocol = matches
-        .get_one::<String>("protocol")
-        .cloned()
-        .unwrap_or_else(|| {
-            if interactive {
-                "TCP".into()
-            } else {
-                "TCP".into()
-            }
-        })
-        .to_uppercase();
+    let protocol = resolve_protocol(matches.get_one::<String>("protocol").cloned(), interactive)?;
     if protocol != "TCP" && protocol != "UDP" {
         return Err(CliError::new("mieru 协议仅支持 TCP 或 UDP"));
     }
@@ -284,32 +316,8 @@ fn add_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Resul
                 short_hex(3)
             )
         });
-    let link = format!(
-        "mierus://{}:{}@{}?profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH&handshake-mode=HANDSHAKE_STANDARD&port={}&protocol={}",
-        username,
-        password,
-        format_uri_host(&host),
-        port,
-        protocol
-    );
-    let client_json = json!({
-        "profiles": [{
-            "profileName": "default",
-            "user": {"name": username, "password": password},
-            "servers": [{
-                "domainName": host,
-                "portBindings": [{"port": port, "protocol": protocol}]
-            }],
-            "mtu": 1400,
-            "multiplexing": {"level": "MULTIPLEXING_HIGH"},
-            "handshakeMode": "HANDSHAKE_STANDARD"
-        }],
-        "activeProfile": "default",
-        "rpcPort": 8964,
-        "socks5Port": 1080,
-        "loggingLevel": "INFO",
-        "socks5ListenLAN": false
-    });
+    let link = build_simple_link(&username, &password, &host, port, &protocol);
+    let client_json = build_client_config(&host, port, &protocol, &username, &password);
     let node = MieruNode {
         node_type: "mieru".into(),
         tag: tag.clone(),
@@ -330,9 +338,15 @@ fn add_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Resul
         }
         emit_success(
             format,
-            json!({"dry_run": true, "tag": tag, "protocol": protocol, "port": port, "link": if show_secrets { Some(link) } else { None::<String> }, "client_json": if show_secrets { Some(client_json) } else { None::<JsonValue> }}),
+            json!({"dry_run": true, "tag": tag, "protocol": protocol, "port": port, "simple_link": if show_secrets { Some(link) } else { None::<String> }, "client_json": if show_secrets { Some(client_json) } else { None::<JsonValue> }}),
             &report,
-            Some(vec![crumb("执行写入", "vps-cli mieru add-node --confirm")]),
+            Some(vec![
+                crumb("执行写入", "vps-cli mieru add-node --confirm"),
+                crumb(
+                    "查看 simple 链接",
+                    "vps-cli mieru show-simple-links --show-secrets",
+                ),
+            ]),
         );
         return Ok(());
     }
@@ -357,7 +371,7 @@ fn add_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Resul
     }
     let mut data = json!({"added": tag, "protocol": protocol, "port": port});
     if show_secrets {
-        data["link"] = json!(node.link);
+        data["simple_link"] = json!(node.link);
         data["client_json"] = node.client;
     }
     emit_success(
@@ -366,7 +380,14 @@ fn add_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Resul
         &report,
         Some(vec![
             crumb("查看节点", "vps-cli mieru list-nodes"),
-            crumb("查看敏感链接", "vps-cli mieru show-links --show-secrets"),
+            crumb(
+                "查看 simple 链接",
+                "vps-cli mieru show-simple-links --show-secrets",
+            ),
+            crumb(
+                "查看标准链接",
+                "vps-cli mieru show-standard-links --show-secrets",
+            ),
         ]),
     );
     Ok(())
@@ -383,8 +404,8 @@ fn list_nodes(format: OutputFormat) -> Result<(), CliError> {
         json!(data),
         &OperationReport::default(),
         Some(vec![crumb(
-            "查看敏感链接",
-            "vps-cli mieru show-links --show-secrets",
+            "查看 simple 链接",
+            "vps-cli mieru show-simple-links --show-secrets",
         )]),
     );
     Ok(())
@@ -402,12 +423,18 @@ fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Res
             .collect::<Vec<_>>();
         emit_success(
             format,
-            json!({"safe_view": true, "nodes": data, "tips": ["如需查看敏感链接，请显式传入 --show-secrets"]}),
+            json!({"safe_view": true, "nodes": data, "tips": ["如需查看 simple 分享链接，请使用 `vps-cli mieru show-simple-links --show-secrets`", "如需查看标准分享链接，请使用 `vps-cli mieru show-standard-links --show-secrets`"]}),
             &OperationReport::default(),
-            Some(vec![crumb(
-                "显示敏感链接",
-                "vps-cli mieru show-links --show-secrets",
-            )]),
+            Some(vec![
+                crumb(
+                    "显示 simple 链接",
+                    "vps-cli mieru show-simple-links --show-secrets",
+                ),
+                crumb(
+                    "显示标准链接",
+                    "vps-cli mieru show-standard-links --show-secrets",
+                ),
+            ]),
         );
         return Ok(());
     }
@@ -422,6 +449,10 @@ fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Res
     report
         .warnings
         .push("当前输出包含敏感凭据，不应贴入公开日志。".into());
+    report.warnings.push(
+        "当前命令是兼容入口，会同时返回 simple 链接和客户端 JSON；如需标准分享链接，请使用 `vps-cli mieru show-standard-links --show-secrets`。"
+            .into(),
+    );
     let data = nodes
         .iter()
         .filter(|item| {
@@ -429,8 +460,98 @@ fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Res
                 .map(|wanted| wanted == &item.tag)
                 .unwrap_or(true)
         })
-        .map(|item| json!({"tag": item.tag, "link": item.link, "client_json": item.client}))
+        .map(|item| json!({"tag": item.tag, "simple_link": item.link, "client_json": item.client}))
         .collect::<Vec<_>>();
+    emit_success(format, json!(data), &report, None);
+    Ok(())
+}
+
+fn show_simple_links(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError> {
+    let show_secrets = matches.get_flag("show-secrets");
+    let id = matches.get_one::<String>("id").cloned();
+    let nodes = read_nodes()?;
+    if !show_secrets {
+        let data = nodes
+            .iter()
+            .filter(|item| id.as_ref().map(|wanted| wanted == &item.tag).unwrap_or(true))
+            .map(|item| json!({"tag": item.tag, "host": item.host, "port": item.port, "protocol": item.protocol}))
+            .collect::<Vec<_>>();
+        emit_success(
+            format,
+            json!({"safe_view": true, "nodes": data, "tips": ["如需查看 simple 分享链接，请显式传入 --show-secrets"]}),
+            &OperationReport::default(),
+            Some(vec![crumb(
+                "显示 simple 链接",
+                "vps-cli mieru show-simple-links --show-secrets",
+            )]),
+        );
+        return Ok(());
+    }
+    let mut report = OperationReport::default();
+    report.sensitive = Some(true);
+    report
+        .warnings
+        .push("当前输出包含敏感凭据，不应贴入公开日志。".into());
+    let data = nodes
+        .iter()
+        .filter(|item| {
+            id.as_ref()
+                .map(|wanted| wanted == &item.tag)
+                .unwrap_or(true)
+        })
+        .map(|item| {
+            json!({
+                "tag": item.tag,
+                "simple_link": item.link
+            })
+        })
+        .collect::<Vec<_>>();
+    emit_success(format, json!(data), &report, None);
+    Ok(())
+}
+
+fn show_standard_links(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError> {
+    let show_secrets = matches.get_flag("show-secrets");
+    let id = matches.get_one::<String>("id").cloned();
+    let nodes = read_nodes()?;
+    if !show_secrets {
+        let data = nodes
+            .iter()
+            .filter(|item| id.as_ref().map(|wanted| wanted == &item.tag).unwrap_or(true))
+            .map(|item| json!({"tag": item.tag, "host": item.host, "port": item.port, "protocol": item.protocol}))
+            .collect::<Vec<_>>();
+        emit_success(
+            format,
+            json!({"safe_view": true, "nodes": data, "tips": ["如需查看标准分享链接，请显式传入 --show-secrets"]}),
+            &OperationReport::default(),
+            Some(vec![crumb(
+                "显示标准链接",
+                "vps-cli mieru show-standard-links --show-secrets",
+            )]),
+        );
+        return Ok(());
+    }
+    let mut report = OperationReport::default();
+    report.sensitive = Some(true);
+    report
+        .warnings
+        .push("当前输出包含完整标准分享链接，不应贴入公开日志。".into());
+    let data = nodes
+        .iter()
+        .filter(|item| {
+            id.as_ref()
+                .map(|wanted| wanted == &item.tag)
+                .unwrap_or(true)
+        })
+        .map(|item| {
+            build_standard_link(&item.client).map(|link| {
+                json!({
+                    "tag": item.tag,
+                    "standard_link": link
+                })
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     emit_success(format, json!(data), &report, None);
     Ok(())
 }
@@ -665,6 +786,23 @@ fn ensure_mita_exists() -> Result<(), CliError> {
     }
 }
 
+fn resolve_protocol(value: Option<String>, interactive: bool) -> Result<String, CliError> {
+    match value {
+        Some(v) => Ok(v.to_uppercase()),
+        None if interactive => {
+            let options = ["TCP", "UDP"];
+            let selection = Select::new()
+                .with_prompt("请选择 mita 传输协议")
+                .items(&options)
+                .default(0)
+                .interact()
+                .map_err(|e| CliError::new(format!("读取协议选择失败: {}", e)))?;
+            Ok(options[selection].to_string())
+        }
+        None => Ok("TCP".into()),
+    }
+}
+
 fn required_or_prompt(
     value: Option<String>,
     prompt: &str,
@@ -723,6 +861,162 @@ fn format_uri_host(host: &str) -> String {
     } else {
         host.to_string()
     }
+}
+
+fn strip_ip_brackets(host: &str) -> String {
+    host.trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string()
+}
+
+fn is_ip_host(host: &str) -> bool {
+    strip_ip_brackets(host).parse::<IpAddr>().is_ok()
+}
+
+fn build_simple_link(
+    username: &str,
+    password: &str,
+    host: &str,
+    port: u16,
+    protocol: &str,
+) -> String {
+    format!(
+        "mierus://{}:{}@{}?profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH&handshake-mode=HANDSHAKE_STANDARD&port={}&protocol={}",
+        username,
+        password,
+        format_uri_host(host),
+        port,
+        protocol
+    )
+}
+
+fn build_client_config(
+    host: &str,
+    port: u16,
+    protocol: &str,
+    username: &str,
+    password: &str,
+) -> JsonValue {
+    let server = if is_ip_host(host) {
+        json!({
+            "ipAddress": strip_ip_brackets(host),
+            "portBindings": [{"port": port, "protocol": protocol}]
+        })
+    } else {
+        json!({
+            "domainName": host,
+            "portBindings": [{"port": port, "protocol": protocol}]
+        })
+    };
+    json!({
+        "profiles": [{
+            "profileName": "default",
+            "user": {"name": username, "password": password},
+            "servers": [server],
+            "mtu": 1400,
+            "multiplexing": {"level": "MULTIPLEXING_HIGH"},
+            "handshakeMode": "HANDSHAKE_STANDARD"
+        }],
+        "activeProfile": "default",
+        "rpcPort": 8964,
+        "socks5Port": 1080,
+        "loggingLevel": "INFO",
+        "socks5ListenLAN": false
+    })
+}
+
+fn build_standard_link(client_config: &JsonValue) -> Result<String, CliError> {
+    let binary = ensure_mieru_client_binary()?;
+    let work_dir = env::temp_dir().join(format!("vps-cli-mieru-export-{}", current_timestamp()));
+    let _ = fs::remove_dir_all(&work_dir);
+    ensure_dir(&work_dir)?;
+    let config_path = work_dir.join("client.json");
+    write_json(&config_path, client_config)?;
+    let apply = SysCmd::new(&binary)
+        .env("HOME", &work_dir)
+        .args(["apply", "config"])
+        .arg(&config_path)
+        .output()
+        .map_err(|e| CliError::new(format!("执行 mieru apply config 失败: {}", e)))?;
+    if !apply.status.success() {
+        return Err(CliError::new(format!(
+            "生成标准分享链接失败：{}",
+            String::from_utf8_lossy(&apply.stderr).trim()
+        )));
+    }
+    let export = SysCmd::new(&binary)
+        .env("HOME", &work_dir)
+        .args(["export", "config"])
+        .output()
+        .map_err(|e| CliError::new(format!("执行 mieru export config 失败: {}", e)))?;
+    if !export.status.success() {
+        return Err(CliError::new(format!(
+            "导出标准分享链接失败：{}",
+            String::from_utf8_lossy(&export.stderr).trim()
+        )));
+    }
+    let link = String::from_utf8_lossy(&export.stdout).trim().to_string();
+    if !link.starts_with("mieru://") {
+        return Err(CliError::new("导出的标准分享链接格式不正确"));
+    }
+    Ok(link)
+}
+
+fn ensure_mieru_client_binary() -> Result<PathBuf, CliError> {
+    let system_binary = SysCmd::new("sh")
+        .arg("-c")
+        .arg("command -v mieru >/dev/null 2>&1")
+        .status();
+    if matches!(system_binary, Ok(status) if status.success()) {
+        return Ok(PathBuf::from("mieru"));
+    }
+    let arch = match std::env::consts::ARCH {
+        "x86_64" | "amd64" => "amd64",
+        "aarch64" => "arm64",
+        other => {
+            return Err(CliError::new(format!(
+                "当前架构暂不支持导出标准 mieru 分享链接：{}",
+                other
+            )))
+        }
+    };
+    if std::env::consts::OS != "linux" {
+        return Err(CliError::new(
+            "当前仅支持在 Linux VPS 上导出标准 mieru 分享链接",
+        ));
+    }
+    let cache_dir = Path::new(MIERU_CLIENT_HELPER_DIR)
+        .join(MIERU_CLIENT_HELPER_VERSION)
+        .join(arch);
+    let binary = cache_dir.join("mieru");
+    if binary.exists() {
+        return Ok(binary);
+    }
+    ensure_dir(&cache_dir)?;
+    let archive_path = cache_dir.join("mieru.tar.gz");
+    let url = format!(
+        "https://github.com/enfein/mieru/releases/download/v{}/mieru_{}_linux_{}.tar.gz",
+        MIERU_CLIENT_HELPER_VERSION, MIERU_CLIENT_HELPER_VERSION, arch
+    );
+    download_file(&url, &archive_path)?;
+    let archive_bytes = fs::read(&archive_path)
+        .map_err(|e| CliError::new(format!("读取 mieru 客户端压缩包失败: {}", e)))?;
+    let tar = GzDecoder::new(Cursor::new(archive_bytes));
+    let mut archive = Archive::new(tar);
+    archive
+        .unpack(&cache_dir)
+        .map_err(|e| CliError::new(format!("解压 mieru 客户端失败: {}", e)))?;
+    if !binary.exists() {
+        return Err(CliError::new("解压后未找到 mieru 可执行文件"));
+    }
+    let mut perms = fs::metadata(&binary)
+        .map_err(|e| CliError::new(format!("读取 mieru 客户端权限失败: {}", e)))?
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&binary, perms)
+        .map_err(|e| CliError::new(format!("设置 mieru 客户端权限失败: {}", e)))?;
+    Ok(binary)
 }
 
 fn iso_now() -> String {
@@ -790,5 +1084,35 @@ fn crumb(action: &str, cmd: &str) -> Breadcrumb {
     Breadcrumb {
         action: action.into(),
         cmd: cmd.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_config_prefers_ip_address_for_ip_hosts() {
+        let config = build_client_config("1.2.3.4", 8443, "TCP", "user", "pass");
+        assert_eq!(config["profiles"][0]["servers"][0]["ipAddress"], "1.2.3.4");
+        assert!(config["profiles"][0]["servers"][0]["domainName"].is_null());
+    }
+
+    #[test]
+    fn client_config_uses_domain_name_for_domain_hosts() {
+        let config = build_client_config("example.com", 8443, "TCP", "user", "pass");
+        assert_eq!(
+            config["profiles"][0]["servers"][0]["domainName"],
+            "example.com"
+        );
+        assert!(config["profiles"][0]["servers"][0]["ipAddress"].is_null());
+    }
+
+    #[test]
+    fn simple_link_contains_expected_scheme() {
+        let link = build_simple_link("user", "pass", "1.2.3.4", 8443, "TCP");
+        assert!(link.starts_with("mierus://"));
+        assert!(link.contains("port=8443"));
+        assert!(link.contains("protocol=TCP"));
     }
 }

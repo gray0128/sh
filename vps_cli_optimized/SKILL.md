@@ -49,7 +49,7 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 |---|---|
 | `setup-ssh` | 配置 SSH 端口、AllowUsers、公钥轮换和基础加固项，带备份、校验和自动回滚。 |
 | `singbox` | 安装 sing-box、添加协议节点、查看节点、安全/敏感视图、检查配置、查看日志和管理服务。 |
-| `mieru` | 安装 mita、添加 mieru 节点、查看安全/敏感视图、查看配置和管理 mita 服务。 |
+| `mieru` | 安装 mita、添加 mieru 节点、查看安全视图、分别查看 simple/standard 分享链接、查看配置和管理 mita 服务。 |
 | `reclaim` | 集中承载高风险收口动作，例如 sing-box 卸载、托管文件清理、代理栈清理、nginx/caddy 清理和 mieru 卸载。 |
 | `version` | 查看当前版本、最新 release 版本、平台架构与下载地址。 |
 | `upgrade` | 下载对应架构的 GitHub Release 资产并升级当前 `vps-cli`。 |
@@ -68,9 +68,10 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 ### 安装 mita 并添加 mieru 节点
 
 1. `vps-cli mieru install --version 3.32.0 --json --confirm` — 安装或更新 mita。  
-2. `vps-cli mieru add-node --host example.com --port 8443 --protocol TCP --json --confirm` — 添加 mieru 节点。  
+2. `vps-cli mieru add-node --host example.com --port 8443 --protocol TCP --json --confirm` — 添加 mieru 节点；交互模式缺少 `--protocol` 时会询问选择 `TCP` 或 `UDP`。  
 3. `vps-cli mieru list-nodes --json` — 查看安全视图。  
-4. `vps-cli mieru show-links --show-secrets --json` — 查看敏感链接和客户端 JSON。  
+4. `vps-cli mieru show-simple-links --show-secrets --json` — 查看 simple 分享链接 `mierus://`。  
+5. `vps-cli mieru show-standard-links --show-secrets --json` — 查看标准分享链接 `mieru://`。  
 5. `vps-cli mieru status --json` — 检查 systemd 状态与 mita 状态。
 
 ### 加固 SSH
@@ -102,7 +103,7 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 - 安装 sing-box 或 mita 需要联网下载二进制或安装包，确保服务器能访问 GitHub。
 - 使用 `--self-signed` 生成的证书仅适合测试环境，客户端通常需要允许 insecure。
 - `setup-ssh` 会修改 `sshd_config.d` 并重载 SSH 服务；生产环境执行前应保持当前 SSH 会话不断开，并准备好控制台入口。
-- `show-links`、`show-config --sensitive` 等命令会返回凭据、UUID、私钥或完整配置，不应贴入公开日志。
+- `show-links`、`show-simple-links --show-secrets`、`show-standard-links --show-secrets`、`show-config --sensitive` 等命令会返回凭据、UUID、私钥或完整配置，不应贴入公开日志。
 - `reclaim` 命令会删除系统文件或 systemd 服务，建议先执行对应的 `audit-*` 命令确认候选项。
 - `version` 与 `upgrade --check` 通常不要求 root；`upgrade` 若目标安装目录不可写，则需要 `sudo` 或 `root`。
 - `singbox`、`mieru`、`setup-ssh`、`reclaim` 的实际管理命令大多需要 `root` 或 `sudo`。
@@ -121,3 +122,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 变更时间：2026-05-16
 本次变更概要：新增 `version` 与 `upgrade` 命令，同步 release 资产命名、root/sudo 使用约定，以及 Linux amd64/arm64 下载分发规则。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：为 `mieru` 增加 simple/standard 分享链接独立命令，并在交互式添加节点时显式询问 `TCP/UDP` 协议。

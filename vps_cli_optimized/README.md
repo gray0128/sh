@@ -252,7 +252,7 @@ vps-cli --no-input singbox add-vless-reality \
 
 - `singbox add-node`：通用 JSON 导入模式，必须自己准备好 JSON 文件
 - `singbox add-vless-reality` / `add-trojan-tls` / `add-hysteria2-tls` / `add-tuic-tls` / `add-shadowsocks`：协议向导模式，支持缺参时交互补全
-- `mieru add-node`：支持交互补全，也支持一次性完整传参
+- `mieru add-node`：支持交互补全，也支持一次性完整传参；交互模式下如果未指定 `--protocol`，会明确询问使用 `TCP` 还是 `UDP`
 
 通用 JSON 导入示例：
 
@@ -269,6 +269,19 @@ vps-cli --no-input mieru add-node \
   --protocol TCP \
   --confirm
 ```
+
+`mieru` 交互示例：
+
+```bash
+vps-cli mieru add-node
+```
+
+交互模式下通常会继续提示：
+
+- 输入服务器公网域名或 IP
+- 输入监听端口
+- 选择 `TCP` 或 `UDP`
+- 确认是否写入节点
 
 ## 常用示例
 
@@ -342,7 +355,19 @@ vps-cli mieru add-node --host example.com --port 8443 --protocol TCP --confirm
 vps-cli mieru list-nodes
 ```
 
-查看敏感链接：
+查看 simple 分享链接：
+
+```bash
+vps-cli mieru show-simple-links --show-secrets
+```
+
+查看标准分享链接：
+
+```bash
+vps-cli mieru show-standard-links --show-secrets
+```
+
+兼容入口：
 
 ```bash
 vps-cli mieru show-links --show-secrets
@@ -439,7 +464,8 @@ vps-cli reclaim cleanup-nginx --confirm
 - 敏感输出需要显式标志，例如：
   - `vps-cli singbox show-links --show-secrets`
   - `vps-cli singbox show-config --sensitive`
-  - `vps-cli mieru show-links --show-secrets`
+  - `vps-cli mieru show-simple-links --show-secrets`
+  - `vps-cli mieru show-standard-links --show-secrets`
   - `vps-cli mieru show-config --sensitive`
 
 JSON 示例：
@@ -468,7 +494,9 @@ JSON 示例：
 - `setup-ssh` 会在写入前备份主配置、托管 drop-in 和 `authorized_keys`，并执行 `sshd -t` 与 `sshd -T` 双重验证。
 - `reclaim` 下的命令属于高风险动作，建议先执行对应 `audit-*` 命令。
 - 自签名证书只适合测试环境。
-- `show-links`、`show-config --sensitive` 等命令会输出链接、凭据、UUID、证书路径或完整配置，不应贴入公开日志。
+- `mieru show-simple-links --show-secrets` 输出的是 simple 分享链接 `mierus://...`，更适合快速分享单节点参数。
+- `mieru show-standard-links --show-secrets` 输出的是标准分享链接 `mieru://...`，更适合完整客户端配置导入。
+- `show-links`、`show-simple-links --show-secrets`、`show-standard-links --show-secrets`、`show-config --sensitive` 等命令会输出链接、凭据、UUID、证书路径或完整配置，不应贴入公开日志。
 - 在生产环境执行 SSH 加固前，建议保留当前会话不断开，并预留控制台入口。
 
 ## 开发与验证
@@ -490,3 +518,8 @@ vps-cli mieru --help
 vps-cli reclaim --help
 vps-cli setup-ssh --help
 ```
+
+---
+
+变更时间：2026-05-16
+本次变更概要：为 `mieru` 新增 simple/standard 分享链接的独立命令，并在交互式 `add-node` 中加入 `TCP/UDP` 协议选择提示。
