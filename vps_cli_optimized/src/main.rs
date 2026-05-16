@@ -1,13 +1,17 @@
-use clap::{Arg, Command, ArgMatches};
-use std::process;
+use clap::{Arg, Command};
 
+mod mieru;
+mod reclaim;
+mod safety;
 mod setup_ssh;
 mod singbox;
 mod utils;
 
+use mieru::handle_mieru;
+use reclaim::handle_reclaim;
 use setup_ssh::handle_setup_ssh;
 use singbox::handle_singbox;
-use utils::{CliError, OutputFormat};
+use utils::OutputFormat;
 
 fn build_cli() -> Command {
     Command::new("vps-cli")
@@ -33,11 +37,13 @@ fn build_cli() -> Command {
         )
         .subcommand(setup_ssh::cli())
         .subcommand(singbox::cli())
+        .subcommand(mieru::cli())
+        .subcommand(reclaim::cli())
 }
 
 fn main() {
-    let cli = build_cli();
-    let matches = cli.get_matches();
+    let mut cli = build_cli();
+    let matches = cli.clone().get_matches();
     // Determine global output format
     let json = matches.get_flag("json");
     let plain = matches.get_flag("plain");
@@ -58,6 +64,16 @@ fn main() {
         }
         Some(("singbox", sub)) => {
             if let Err(err) = handle_singbox(sub, output_format, no_input) {
+                err.output_and_exit(output_format);
+            }
+        }
+        Some(("mieru", sub)) => {
+            if let Err(err) = handle_mieru(sub, output_format, no_input) {
+                err.output_and_exit(output_format);
+            }
+        }
+        Some(("reclaim", sub)) => {
+            if let Err(err) = handle_reclaim(sub, output_format, no_input) {
                 err.output_and_exit(output_format);
             }
         }
