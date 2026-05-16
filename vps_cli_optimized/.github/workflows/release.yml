@@ -1,0 +1,41 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+          profile: minimal
+          override: true
+      - name: Install cross for cross-compilation
+        run: cargo install cross --locked
+      - name: Build
+        run: |
+          cd cli_tool
+          cross build --release --target ${{ matrix.target }}
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-cli-${{ matrix.target }}
+          path: cli_tool/target/${{ matrix.target }}/release/vps-cli
+          retention-days: 7
+      - name: Upload SKILL
+        uses: actions/upload-artifact@v4
+        with:
+          name: SKILL
+          path: cli_tool/SKILL.md
+          retention-days: 7
