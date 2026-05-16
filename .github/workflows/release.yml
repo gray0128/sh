@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,7 +27,7 @@ jobs:
         working-directory: vps_cli_optimized
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -46,7 +49,7 @@ jobs:
           rm -f dist/vps-cli
 
       - name: Upload release archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vps-cli-linux-${{ matrix.arch }}
           path: |
@@ -55,14 +58,14 @@ jobs:
           retention-days: 7
 
       - name: Upload README
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vps-cli-docs
           path: vps_cli_optimized/README.md
           retention-days: 7
 
       - name: Upload SKILL
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: vps-cli-skill
           path: vps_cli_optimized/SKILL.md
@@ -74,14 +77,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download release archive artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: vps-cli-linux-*
           path: dist
           merge-multiple: true
 
       - name: Publish GitHub Release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             dist/vps-cli-linux-amd64.tar.gz
