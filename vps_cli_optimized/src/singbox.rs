@@ -710,6 +710,50 @@ fn removable_node_choices(config: &JsonValue) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+fn removable_meta_choices(metas: &[NodeMeta]) -> Vec<(String, String)> {
+    metas
+        .iter()
+        .map(|item| {
+            (
+                item.tag.clone(),
+                format!(
+                    "{} | 类型: {} | 地址: {} | 端口: {} | 协议: {}",
+                    item.tag, item.node_type, item.server, item.port, item.network
+                ),
+            )
+        })
+        .collect()
+}
+
+fn resolve_optional_meta_id(
+    id: Option<String>,
+    metas: &[NodeMeta],
+    interactive: bool,
+    prompt: &str,
+) -> Result<Option<String>, CliError> {
+    match id {
+        Some(id) => Ok(Some(id)),
+        None if interactive => {
+            let choices = removable_meta_choices(metas);
+            if choices.is_empty() {
+                return Err(CliError::new("当前没有可选择的节点"));
+            }
+            let labels = choices
+                .iter()
+                .map(|(_, label)| label.clone())
+                .collect::<Vec<_>>();
+            let idx = Select::new()
+                .with_prompt(prompt)
+                .items(&labels)
+                .default(0)
+                .interact()
+                .map_err(|e| CliError::new(format!("读取选择失败: {}", e)))?;
+            Ok(Some(choices[idx].0.clone()))
+        }
+        None => Ok(None),
+    }
+}
+
 fn service_action(action: &str, format: OutputFormat) -> Result<(), CliError> {
     let service_name = "sing-box";
     let result = match action {
@@ -1875,7 +1919,12 @@ fn show_config(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliErro
 
 fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Result<(), CliError> {
     let metas = read_node_meta()?;
-    let id = matches.get_one::<String>("id").cloned();
+    let id = resolve_optional_meta_id(
+        matches.get_one::<String>("id").cloned(),
+        &metas,
+        is_interactive(no_input),
+        "请选择要查看链接的节点",
+    )?;
     let show_secrets = matches.get_flag("show-secrets");
     if !show_secrets {
         let data: Vec<_> = metas
@@ -2440,5 +2489,31 @@ mod tests {
         assert!(choices[0].1.contains("vless-01"));
         assert!(choices[0].1.contains("443"));
         assert!(choices[1].1.contains("udp"));
+    }
+
+    #[test]
+    fn removable_meta_choices_uses_server_port_and_network() {
+        let metas = vec![NodeMeta {
+            tag: "vless-01".into(),
+            node_type: "vless".into(),
+            server: "example.com".into(),
+            port: 443,
+            network: "tcp".into(),
+            link: None,
+            client_json: None,
+            created_at: "2026-05-16T00:00:00Z".into(),
+        }];
+        let choices = removable_meta_choices(&metas);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].0, "vless-01");
+        assert!(choices[0].1.contains("example.com"));
+        assert!(choices[0].1.contains("443"));
+        assert!(choices[0].1.contains("tcp"));
+    }
+
+    #[test]
+    fn resolve_optional_meta_id_returns_none_in_non_interactive_mode() {
+        let selected = resolve_optional_meta_id(None, &[], false, "ignored").unwrap();
+        assert!(selected.is_none());
     }
 }
