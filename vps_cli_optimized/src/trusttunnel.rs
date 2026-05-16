@@ -378,6 +378,9 @@ fn service_status(format: OutputFormat) -> Result<(), CliError> {
     if !stderr.is_empty() {
         report.warnings.push(stderr);
     }
+    if !service_exists {
+        report.warnings.push(missing_service_guidance(&output_dir));
+    }
     emit_success(
         format,
         json!({
@@ -398,6 +401,11 @@ fn service_status(format: OutputFormat) -> Result<(), CliError> {
 }
 
 fn service_action(action: &str, format: OutputFormat) -> Result<(), CliError> {
+    if !Path::new(TRUSTTUNNEL_SERVICE_FILE).exists() {
+        return Err(CliError::new(missing_service_guidance(
+            TRUSTTUNNEL_DEFAULT_INSTALL_DIR,
+        )));
+    }
     let output = SysCmd::new("systemctl")
         .args([action, TRUSTTUNNEL_SERVICE_NAME])
         .output()
@@ -498,6 +506,13 @@ fn run_setup_wizard(
         if !status.success() {
             return Err(CliError::new("setup_wizard 执行失败"));
         }
+        let service_installed =
+            ensure_trusttunnel_service_installed(&install_dir).map_err(|err| {
+                CliError::new(format!(
+                    "setup_wizard 已完成，但安装 systemd 服务文件失败: {}",
+                    err
+                ))
+            })?;
         emit_success(
             format,
             json!({
@@ -505,6 +520,8 @@ fn run_setup_wizard(
                 "interactive": true,
                 "install_dir": install_dir,
                 "config_paths": config_path_summary(&install_dir),
+                "systemd_service": TRUSTTUNNEL_SERVICE_FILE,
+                "service_file_installed": service_installed || Path::new(TRUSTTUNNEL_SERVICE_FILE).exists(),
             }),
             &OperationReport::default(),
             Some(vec![
@@ -527,6 +544,12 @@ fn run_setup_wizard(
             &output.stderr,
         ));
     }
+    let service_installed = ensure_trusttunnel_service_installed(&install_dir).map_err(|err| {
+        CliError::new(format!(
+            "setup_wizard 已完成，但安装 systemd 服务文件失败: {}",
+            err
+        ))
+    })?;
     emit_success(
         format,
         json!({
@@ -534,6 +557,8 @@ fn run_setup_wizard(
             "interactive": false,
             "install_dir": install_dir,
             "config_paths": config_path_summary(&install_dir),
+            "systemd_service": TRUSTTUNNEL_SERVICE_FILE,
+            "service_file_installed": service_installed || Path::new(TRUSTTUNNEL_SERVICE_FILE).exists(),
             "stdout": non_empty_text(&output.stdout),
         }),
         &OperationReport::default(),
@@ -726,6 +751,89 @@ fn trusttunnel_service_template_path(install_dir: &str) -> PathBuf {
     Path::new(install_dir).join(TRUSTTUNNEL_SERVICE_TEMPLATE)
 }
 
+fn sync_service_template(template_path: &Path, service_path: &Path) -> Result<bool, CliError> {
+    if !template_path.exists() {
+        return Err(CliError::new(format!(
+            "未找到 TrustTunnel systemd 模板：{}",
+            template_path.display()
+        )));
+    }
+    if let Some(parent) = service_path.parent() {
+        ensure_dir(parent)?;
+    }
+    let template_content = fs::read(template_path).map_err(|e| {
+        CliError::new(format!(
+            "读取 TrustTunnel systemd 模板失败 {}: {}",
+            template_path.display(),
+            e
+        ))
+    })?;
+    if service_path.exists() {
+        let existing_content = fs::read(service_path).map_err(|e| {
+            CliError::new(format!(
+                "读取现有 TrustTunnel systemd 文件失败 {}: {}",
+                service_path.display(),
+                e
+            ))
+        })?;
+        if existing_content == template_content {
+            return Ok(false);
+        }
+    }
+    fs::write(service_path, template_content).map_err(|e| {
+        CliError::new(format!(
+            "写入 TrustTunnel systemd 文件失败 {}: {}",
+            service_path.display(),
+            e
+        ))
+    })?;
+    Ok(true)
+}
+
+fn daemon_reload() -> Result<(), CliError> {
+    let output = SysCmd::new("systemctl")
+        .arg("daemon-reload")
+        .output()
+        .map_err(|e| CliError::new(format!("执行 systemctl daemon-reload 失败: {}", e)))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_failed(
+            "systemctl daemon-reload 失败",
+            &output.stdout,
+            &output.stderr,
+        ))
+    }
+}
+
+fn ensure_trusttunnel_service_installed(install_dir: &str) -> Result<bool, CliError> {
+    let changed = sync_service_template(
+        &trusttunnel_service_template_path(install_dir),
+        Path::new(TRUSTTUNNEL_SERVICE_FILE),
+    )?;
+    if changed {
+        daemon_reload()?;
+    }
+    Ok(changed)
+}
+
+fn missing_service_guidance(install_dir: &str) -> String {
+    let template = trusttunnel_service_template_path(install_dir);
+    if template.exists() {
+        format!(
+            "未检测到 systemd 服务文件 {}。请先执行 `vps-cli trusttunnel setup-wizard`，CLI 会将模板 {} 安装为 systemd 服务。",
+            TRUSTTUNNEL_SERVICE_FILE,
+            template.display()
+        )
+    } else {
+        format!(
+            "未检测到 systemd 服务文件 {}，且未找到服务模板 {}。请先执行 `vps-cli trusttunnel install`，再执行 `vps-cli trusttunnel setup-wizard`。",
+            TRUSTTUNNEL_SERVICE_FILE,
+            template.display()
+        )
+    }
+}
+
 fn detected_binaries(install_dir: &str) -> Vec<String> {
     [
         trusttunnel_binary_path(install_dir),
@@ -819,5 +927,61 @@ fn crumb(action: &str, cmd: &str) -> Breadcrumb {
     Breadcrumb {
         action: action.into(),
         cmd: cmd.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sync_service_template;
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_test_dir(name: &str) -> PathBuf {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        env::temp_dir().join(format!(
+            "vps-cli-trusttunnel-tests-{}-{}-{}",
+            name,
+            process::id(),
+            ts
+        ))
+    }
+
+    #[test]
+    fn sync_service_template_creates_service_file() {
+        let dir = temp_test_dir("create");
+        fs::create_dir_all(&dir).unwrap();
+        let template = dir.join("trusttunnel.service.template");
+        let service = dir.join("systemd").join("trusttunnel.service");
+        fs::write(&template, "[Unit]\nDescription=TrustTunnel\n").unwrap();
+
+        let changed = sync_service_template(&template, &service).unwrap();
+
+        assert!(changed);
+        assert_eq!(
+            fs::read_to_string(&service).unwrap(),
+            "[Unit]\nDescription=TrustTunnel\n"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sync_service_template_skips_unchanged_service_file() {
+        let dir = temp_test_dir("unchanged");
+        fs::create_dir_all(dir.join("systemd")).unwrap();
+        let template = dir.join("trusttunnel.service.template");
+        let service = dir.join("systemd").join("trusttunnel.service");
+        fs::write(&template, "[Service]\nExecStart=/bin/true\n").unwrap();
+        fs::write(&service, "[Service]\nExecStart=/bin/true\n").unwrap();
+
+        let changed = sync_service_template(&template, &service).unwrap();
+
+        assert!(!changed);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
