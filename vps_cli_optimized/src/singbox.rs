@@ -314,7 +314,7 @@ pub fn handle_singbox(
         Some(("add-shadowsocks", sub)) => add_shadowsocks(sub, format, no_input),
         Some(("list-nodes", sub)) => list_nodes(sub, format),
         Some(("show-links", sub)) => show_links(sub, format, no_input),
-        Some(("show-config", sub)) => show_config(sub, format),
+        Some(("show-config", sub)) => show_config(sub, format, no_input),
         Some(("check-config", _)) => check_config(format),
         Some(("logs", sub)) => show_logs(sub, format, no_input),
         Some(("remove-node", sub)) => remove_node(sub, format, no_input),
@@ -1889,7 +1889,7 @@ fn check_config(format: OutputFormat) -> Result<(), CliError> {
     Ok(())
 }
 
-fn show_config(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError> {
+fn show_config(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Result<(), CliError> {
     let config = read_singbox_config().ok_or_else(|| CliError::new("未找到 sing-box 配置文件"))?;
     if matches.get_flag("sensitive") {
         let mut report = OperationReport::default();
@@ -1899,20 +1899,61 @@ fn show_config(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliErro
             .push("完整配置包含密钥、证书路径或凭据，不应贴入公开日志。".into());
         emit_success(format, config, &report, None);
     } else {
-        let summaries = list_node_summaries();
-        emit_success(
-            format,
-            json!({
-                "config": SINGBOX_CONFIG_PATH,
-                "inbounds": summaries,
-                "tips": ["如需查看完整配置，请显式传入 --sensitive"]
-            }),
-            &OperationReport::default(),
-            Some(vec![crumb(
-                "查看完整配置",
-                "vps-cli singbox show-config --sensitive",
-            )]),
-        );
+        let interactive = is_interactive(no_input);
+        let selected = if interactive {
+            let choices = removable_node_choices(&config);
+            if choices.is_empty() {
+                None
+            } else {
+                let labels = choices
+                    .iter()
+                    .map(|(_, label)| label.clone())
+                    .collect::<Vec<_>>();
+                let idx = Select::new()
+                    .with_prompt("请选择要查看配置的节点")
+                    .items(&labels)
+                    .default(0)
+                    .interact()
+                    .map_err(|e| CliError::new(format!("读取选择失败: {}", e)))?;
+                Some(choices[idx].0.clone())
+            }
+        } else {
+            None
+        };
+        if let Some(tag) = selected {
+            let inbound = find_inbound_by_tag(&config, &tag)
+                .ok_or_else(|| CliError::new(format!("未找到节点 {}", tag)))?;
+            let summary = inbound_summary(inbound);
+            emit_success(
+                format,
+                json!({
+                    "config": SINGBOX_CONFIG_PATH,
+                    "selected": summary,
+                    "inbound": inbound,
+                    "tips": ["如需查看完整配置，请显式传入 --sensitive"]
+                }),
+                &OperationReport::default(),
+                Some(vec![crumb(
+                    "查看完整配置",
+                    "vps-cli singbox show-config --sensitive",
+                )]),
+            );
+        } else {
+            let summaries = list_node_summaries();
+            emit_success(
+                format,
+                json!({
+                    "config": SINGBOX_CONFIG_PATH,
+                    "inbounds": summaries,
+                    "tips": ["如需查看完整配置，请显式传入 --sensitive"]
+                }),
+                &OperationReport::default(),
+                Some(vec![crumb(
+                    "查看完整配置",
+                    "vps-cli singbox show-config --sensitive",
+                )]),
+            );
+        }
     }
     Ok(())
 }
@@ -2019,6 +2060,26 @@ fn list_node_summaries() -> Vec<JsonValue> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn find_inbound_by_tag<'a>(config: &'a JsonValue, tag: &str) -> Option<&'a JsonValue> {
+    config
+        .get("inbounds")
+        .and_then(|v| v.as_array())
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item.get("tag").and_then(|v| v.as_str()) == Some(tag))
+        })
+}
+
+fn inbound_summary(item: &JsonValue) -> JsonValue {
+    json!({
+        "tag": item.get("tag").and_then(|v| v.as_str()).unwrap_or(""),
+        "type": item.get("type").and_then(|v| v.as_str()).unwrap_or(""),
+        "port": item.get("listen_port").and_then(|v| v.as_u64()).unwrap_or_default(),
+        "network": infer_network(item),
+    })
 }
 
 fn build_generic_meta(inbound: &JsonValue) -> Result<NodeMeta, CliError> {
@@ -2515,5 +2576,18 @@ mod tests {
     fn resolve_optional_meta_id_returns_none_in_non_interactive_mode() {
         let selected = resolve_optional_meta_id(None, &[], false, "ignored").unwrap();
         assert!(selected.is_none());
+    }
+
+    #[test]
+    fn find_inbound_by_tag_returns_matching_inbound() {
+        let config = json!({
+            "inbounds": [
+                {"tag": "vless-01", "type": "vless", "listen_port": 443},
+                {"tag": "hy2-01", "type": "hysteria2", "listen_port": 8443}
+            ]
+        });
+        let inbound = find_inbound_by_tag(&config, "hy2-01").unwrap();
+        assert_eq!(inbound["type"], "hysteria2");
+        assert_eq!(inbound["listen_port"], 8443);
     }
 }
