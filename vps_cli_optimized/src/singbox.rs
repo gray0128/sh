@@ -885,7 +885,7 @@ fn resolve_singbox_release(
 
 fn fetch_github_release(url: &str) -> Result<GitHubRelease, CliError> {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("vps-cli/0.1.0")
+        .user_agent(format!("vps-cli/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| CliError::new(format!("创建 GitHub 请求失败: {}", e)))?;
     let response = client

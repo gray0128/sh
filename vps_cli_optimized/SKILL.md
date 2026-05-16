@@ -16,7 +16,7 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 - Release 资产名称固定为：
   - `vps-cli-linux-amd64.tar.gz`
   - `vps-cli-linux-arm64.tar.gz`
-- 当前约定的最新 release 版本先按 `0.1.0` 处理。
+- 当前约定的最新 release 版本先按 `0.1.1` 处理。
 
 ## Output Contract
 
@@ -133,3 +133,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 变更时间：2026-05-16
 本次变更概要：将 `mieru add-node --show-secrets` 调整为只返回敏感查看入口，并修复 `singbox install` 默认最新稳定版解析官方 release 资产名导致的下载 404 问题。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：同步发布版本线到 `0.1.1`，更新默认最新 release 说明，用于发布 `v0.1.1`。
