@@ -681,18 +681,24 @@ fn export_config(
         "format": export_format,
         "show_secrets": show_secrets,
         "tips": [
-            "未显式传入 --show-secrets 时，CLI 不会直接回显完整导出内容",
+            "deeplink 格式会默认直接输出链接，便于客户端导入",
             "如果导出的是 deeplink 或 TOML，请避免贴入公开日志"
         ]
     });
     let mut report = OperationReport::default();
+    let exported_content = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if show_secrets {
-        data["content"] =
-            JsonValue::String(String::from_utf8_lossy(&output.stdout).trim().to_string());
+        data["content"] = JsonValue::String(exported_content.clone());
         report.sensitive = Some(true);
         report
             .warnings
             .push("当前输出包含敏感配置内容，不应贴入公开日志。".into());
+    } else if should_inline_deeplink(&export_format) {
+        data["link"] = JsonValue::String(exported_content);
+        report.sensitive = Some(true);
+        report
+            .warnings
+            .push("当前输出已直接包含 TrustTunnel deeplink，请勿贴入公开日志。".into());
     } else {
         data["content_hidden"] = JsonValue::Bool(true);
         data["stdout_preview"] = JsonValue::String("已隐藏，请显式传入 --show-secrets 查看".into());
@@ -826,6 +832,10 @@ fn parse_toml_string_literal(value: &str) -> Option<String> {
     let value = value.strip_prefix('"')?;
     let end = value.find('"')?;
     Some(value[..end].to_string())
+}
+
+fn should_inline_deeplink(export_format: &str) -> bool {
+    export_format == "deeplink"
 }
 
 fn sync_service_template(template_path: &Path, service_path: &Path) -> Result<bool, CliError> {
@@ -1026,7 +1036,7 @@ fn crumb(action: &str, cmd: &str) -> Breadcrumb {
 mod tests {
     use super::{
         infer_default_address, infer_first_client_name, parse_toml_string_assignment,
-        resolve_credentials_path, sync_service_template,
+        resolve_credentials_path, should_inline_deeplink, sync_service_template,
     };
     use std::env;
     use std::fs;
@@ -1149,5 +1159,11 @@ password = "secret"
 
         assert_eq!(resolved, dir.join("credentials.toml"));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_deeplink_is_inlined_by_default() {
+        assert!(should_inline_deeplink("deeplink"));
+        assert!(!should_inline_deeplink("toml"));
     }
 }
