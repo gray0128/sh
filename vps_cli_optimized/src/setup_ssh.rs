@@ -361,11 +361,18 @@ fn apply_plan(plan: &SetupPlan) -> Result<ApplyResult, CliError> {
             &auth_backup,
             auth_target.as_deref(),
         )?;
-        return Err(err.with_warnings(vec!["校验或重载失败，已尝试自动恢复 SSH 配置。".into()]));
+        report.rolled_back = Some(true);
+        report
+            .warnings
+            .push("校验或重载失败，已尝试自动恢复 SSH 配置。".into());
+        return Err(err
+            .with_warnings(vec!["校验或重载失败，已尝试自动恢复 SSH 配置。".into()])
+            .with_report(&report));
     }
     if let Some(port) = plan.port {
         configure_firewall(port)?;
     }
+    report.rolled_back = Some(false);
 
     Ok(ApplyResult {
         report,
@@ -779,6 +786,15 @@ fn emit_success(
                 for item in &report.backups {
                     println!("- {}", item);
                 }
+            }
+            if !report.changed_files.is_empty() {
+                println!("\n变更文件:");
+                for item in &report.changed_files {
+                    println!("- {}", item);
+                }
+            }
+            if let Some(rolled_back) = report.rolled_back {
+                println!("\n已自动回滚: {}", if rolled_back { "是" } else { "否" });
             }
         }
     }

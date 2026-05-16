@@ -1,10 +1,12 @@
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use serde_json::{json, Value as JsonValue};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command as SysCmd;
 
-use crate::safety::{append_backup, backup_path, ensure_dir, is_interactive, require_confirmation};
+use crate::safety::{
+    append_backup, backup_path, ensure_dir, is_interactive, require_confirmation, restore_backup,
+};
 use crate::utils::{Breadcrumb, CliError, OperationReport, OutputEnvelope, OutputFormat};
 
 const RECLAIM_BACKUP_DIR: &str = "/root/vps-cli-reclaim-backups";
@@ -13,6 +15,12 @@ const SINGBOX_SERVICE_FILE: &str = "/etc/systemd/system/sing-box.service";
 const SINGBOX_BINARY_PATH: &str = "/usr/local/bin/sing-box";
 const SINGBOX_META_FILE: &str = "/etc/sing-box/vps-cli-nodes.json";
 const MIERU_MANAGED_DIR: &str = "/etc/mieru-managed";
+
+#[derive(Debug, Clone)]
+struct BackupEntry {
+    original_path: PathBuf,
+    backup_path: Option<PathBuf>,
+}
 
 pub fn cli() -> Command {
     Command::new("reclaim")
@@ -115,27 +123,41 @@ fn singbox_uninstall(
         confirm,
     )?;
 
-    ensure_dir(Path::new(RECLAIM_BACKUP_DIR))?;
-    let service_backup = backup_path(
-        Path::new(SINGBOX_SERVICE_FILE),
-        Path::new(RECLAIM_BACKUP_DIR),
-        "singbox-service",
-    )?;
-    let meta_backup = backup_path(
-        Path::new(SINGBOX_META_FILE),
-        Path::new(RECLAIM_BACKUP_DIR),
-        "singbox-meta",
+    let mut report = OperationReport::default();
+    let backups = backup_paths(
+        &[SINGBOX_BINARY_PATH, SINGBOX_SERVICE_FILE],
+        "singbox-uninstall",
+        &mut report,
     )?;
     stop_disable_service("sing-box");
-    remove_if_exists(Path::new(SINGBOX_BINARY_PATH))?;
-    remove_if_exists(Path::new(SINGBOX_SERVICE_FILE))?;
-    let _ = SysCmd::new("systemctl").arg("daemon-reload").status();
+    if let Err(err) = remove_if_exists(Path::new(SINGBOX_BINARY_PATH)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "卸载 sing-box 失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = remove_if_exists(Path::new(SINGBOX_SERVICE_FILE)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "卸载 sing-box 失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = daemon_reload() {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "重载 systemd 失败，已尝试恢复已删除文件。",
+        ));
+    }
 
-    let mut report = OperationReport::default();
     report.changed_files.push(SINGBOX_BINARY_PATH.into());
     report.changed_files.push(SINGBOX_SERVICE_FILE.into());
-    append_backup(&mut report, &service_backup);
-    append_backup(&mut report, &meta_backup);
+    report.rolled_back = Some(false);
     emit_success(
         format,
         json!({
@@ -165,29 +187,54 @@ fn singbox_purge(
         confirm,
     )?;
 
-    ensure_dir(Path::new(RECLAIM_BACKUP_DIR))?;
-    let cfg_backup = backup_path(
-        Path::new(SINGBOX_CONFIG_DIR),
-        Path::new(RECLAIM_BACKUP_DIR),
-        "singbox-dir",
-    )?;
-    let service_backup = backup_path(
-        Path::new(SINGBOX_SERVICE_FILE),
-        Path::new(RECLAIM_BACKUP_DIR),
-        "singbox-service",
+    let mut report = OperationReport::default();
+    let backups = backup_paths(
+        &[
+            SINGBOX_BINARY_PATH,
+            SINGBOX_SERVICE_FILE,
+            SINGBOX_CONFIG_DIR,
+        ],
+        "singbox-purge",
+        &mut report,
     )?;
     stop_disable_service("sing-box");
-    remove_if_exists(Path::new(SINGBOX_BINARY_PATH))?;
-    remove_if_exists(Path::new(SINGBOX_SERVICE_FILE))?;
-    remove_if_exists(Path::new(SINGBOX_CONFIG_DIR))?;
-    let _ = SysCmd::new("systemctl").arg("daemon-reload").status();
+    if let Err(err) = remove_if_exists(Path::new(SINGBOX_BINARY_PATH)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "清理 sing-box 托管文件失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = remove_if_exists(Path::new(SINGBOX_SERVICE_FILE)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "清理 sing-box 托管文件失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = remove_if_exists(Path::new(SINGBOX_CONFIG_DIR)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "清理 sing-box 托管文件失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = daemon_reload() {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "重载 systemd 失败，已尝试恢复已删除文件。",
+        ));
+    }
 
-    let mut report = OperationReport::default();
     report.changed_files.push(SINGBOX_BINARY_PATH.into());
     report.changed_files.push(SINGBOX_SERVICE_FILE.into());
     report.changed_files.push(SINGBOX_CONFIG_DIR.into());
-    append_backup(&mut report, &cfg_backup);
-    append_backup(&mut report, &service_backup);
+    report.rolled_back = Some(false);
     emit_success(
         format,
         json!({"purged": true, "removed_paths": [SINGBOX_BINARY_PATH, SINGBOX_SERVICE_FILE, SINGBOX_CONFIG_DIR]}),
@@ -217,8 +264,24 @@ fn cleanup_proxies(
     no_input: bool,
 ) -> Result<(), CliError> {
     let candidates = collect_proxy_candidates();
+    if candidates.is_empty() {
+        let mut report = OperationReport::default();
+        report.rolled_back = Some(false);
+        emit_success(
+            format,
+            json!({"cleaned": [], "candidates": []}),
+            &report,
+            Some(vec![
+                crumb("审计 nginx", "vps-cli reclaim audit-nginx"),
+                crumb("审计 caddy", "vps-cli reclaim audit-caddy"),
+            ]),
+        );
+        return Ok(());
+    }
+
     let interactive = is_interactive(no_input);
     let confirm = matches.get_flag("confirm");
+    preview_candidates("即将清理的代理候选项", &candidates, format);
     require_confirmation(
         &format!(
             "将尝试删除 {} 个代理候选路径/服务，确认继续？",
@@ -228,6 +291,12 @@ fn cleanup_proxies(
         false,
         confirm,
     )?;
+
+    let mut report = OperationReport::default();
+    report
+        .warnings
+        .push("cleanup-proxies 已展示候选项，请确认删除范围无误。".into());
+    let backups = backup_candidates(&candidates, "proxy-cleanup", &mut report)?;
     let mut removed = vec![];
     for candidate in &candidates {
         if candidate["kind"] == json!("service") {
@@ -238,16 +307,31 @@ fn cleanup_proxies(
         if let Some(path) = candidate["path"].as_str() {
             let target = Path::new(path);
             if target.exists() {
-                let _ = remove_if_exists(target);
+                if let Err(err) = remove_if_exists(target) {
+                    return Err(rollback_error(
+                        err,
+                        &backups,
+                        &mut report,
+                        "清理代理候选项失败，已尝试恢复已删除文件。",
+                    ));
+                }
                 removed.push(path.to_string());
             }
         }
     }
-    let mut report = OperationReport::default();
+    if let Err(err) = daemon_reload() {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "重载 systemd 失败，已尝试恢复已删除文件。",
+        ));
+    }
     report.changed_files = removed.clone();
+    report.rolled_back = Some(false);
     emit_success(
         format,
-        json!({"cleaned": removed}),
+        json!({"candidates": candidates, "cleaned": removed}),
         &report,
         Some(vec![
             crumb("审计 nginx", "vps-cli reclaim audit-nginx"),
@@ -280,6 +364,18 @@ fn cleanup_web_server(
     let interactive = is_interactive(no_input);
     let confirm = matches.get_flag("confirm");
     let candidates = collect_web_candidates(name);
+    if candidates.is_empty() {
+        let mut report = OperationReport::default();
+        report.rolled_back = Some(false);
+        emit_success(
+            format,
+            json!({"server": name, "cleaned": [], "candidates": []}),
+            &report,
+            None,
+        );
+        return Ok(());
+    }
+    preview_candidates(&format!("即将清理的 {} 候选项", name), &candidates, format);
     require_confirmation(
         &format!(
             "将尝试清理 {} 的 {} 个候选路径/服务，确认继续？",
@@ -290,6 +386,12 @@ fn cleanup_web_server(
         false,
         confirm,
     )?;
+    let mut report = OperationReport::default();
+    report.warnings.push(format!(
+        "cleanup-{} 已展示候选项，请确认删除范围无误。",
+        name
+    ));
+    let backups = backup_candidates(&candidates, &format!("{}-cleanup", name), &mut report)?;
     let mut removed = vec![];
     for candidate in &candidates {
         if candidate["kind"] == json!("service") {
@@ -300,16 +402,31 @@ fn cleanup_web_server(
         if let Some(path) = candidate["path"].as_str() {
             let target = Path::new(path);
             if target.exists() {
-                let _ = remove_if_exists(target);
+                if let Err(err) = remove_if_exists(target) {
+                    return Err(rollback_error(
+                        err,
+                        &backups,
+                        &mut report,
+                        "清理 Web 服务候选项失败，已尝试恢复已删除文件。",
+                    ));
+                }
                 removed.push(path.to_string());
             }
         }
     }
-    let mut report = OperationReport::default();
+    if let Err(err) = daemon_reload() {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "重载 systemd 失败，已尝试恢复已删除文件。",
+        ));
+    }
     report.changed_files = removed.clone();
+    report.rolled_back = Some(false);
     emit_success(
         format,
-        json!({"server": name, "cleaned": removed}),
+        json!({"server": name, "candidates": candidates, "cleaned": removed}),
         &report,
         None,
     );
@@ -330,30 +447,64 @@ fn mieru_uninstall(
         confirm,
     )?;
 
-    ensure_dir(Path::new(RECLAIM_BACKUP_DIR))?;
-    let managed_backup = backup_path(
-        Path::new(MIERU_MANAGED_DIR),
-        Path::new(RECLAIM_BACKUP_DIR),
-        "mieru-dir",
+    let mut report = OperationReport::default();
+    let backups = backup_paths(
+        &[
+            MIERU_MANAGED_DIR,
+            "/etc/systemd/system/mita.service",
+            "/lib/systemd/system/mita.service",
+            "/usr/lib/systemd/system/mita.service",
+        ],
+        "mieru-uninstall",
+        &mut report,
     )?;
     stop_disable_service("mita");
-    uninstall_mita_package();
     for path in [
         "/etc/systemd/system/mita.service",
         "/lib/systemd/system/mita.service",
         "/usr/lib/systemd/system/mita.service",
     ] {
-        let _ = remove_if_exists(Path::new(path));
+        if let Err(err) = remove_if_exists(Path::new(path)) {
+            return Err(rollback_error(
+                err,
+                &backups,
+                &mut report,
+                "卸载 mieru 托管文件失败，已尝试恢复已删除文件。",
+            ));
+        }
     }
-    remove_if_exists(Path::new(MIERU_MANAGED_DIR))?;
-    let _ = SysCmd::new("systemctl").arg("daemon-reload").status();
+    if let Err(err) = remove_if_exists(Path::new(MIERU_MANAGED_DIR)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "卸载 mieru 托管文件失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = daemon_reload() {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "重载 systemd 失败，已尝试恢复已删除文件。",
+        ));
+    }
+    uninstall_mita_package();
     let _ = SysCmd::new("systemctl")
         .args(["reset-failed", "mita.service"])
         .status();
 
-    let mut report = OperationReport::default();
     report.changed_files.push(MIERU_MANAGED_DIR.into());
-    append_backup(&mut report, &managed_backup);
+    report
+        .changed_files
+        .push("/etc/systemd/system/mita.service".into());
+    report
+        .changed_files
+        .push("/lib/systemd/system/mita.service".into());
+    report
+        .changed_files
+        .push("/usr/lib/systemd/system/mita.service".into());
+    report.rolled_back = Some(false);
     emit_success(
         format,
         json!({"uninstalled": true, "target": "mita/mieru"}),
@@ -493,6 +644,126 @@ fn systemd_exists(unit: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn daemon_reload() -> Result<(), CliError> {
+    let status = SysCmd::new("systemctl")
+        .arg("daemon-reload")
+        .status()
+        .map_err(|e| CliError::new(format!("执行 systemctl daemon-reload 失败: {}", e)))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CliError::new("systemctl daemon-reload 执行失败"))
+    }
+}
+
+fn preview_candidates(title: &str, candidates: &[JsonValue], format: OutputFormat) {
+    if matches!(format, OutputFormat::Json) {
+        return;
+    }
+    println!("{}:", title);
+    for item in candidate_descriptions(candidates) {
+        println!("- {}", item);
+    }
+}
+
+fn candidate_descriptions(candidates: &[JsonValue]) -> Vec<String> {
+    candidates
+        .iter()
+        .map(|candidate| {
+            if candidate["kind"] == json!("service") {
+                let name = candidate["name"].as_str().unwrap_or("<unknown>");
+                let path = candidate["path"].as_str().unwrap_or("<unknown>");
+                format!("service {} ({})", name, path)
+            } else {
+                candidate["path"]
+                    .as_str()
+                    .map(|path| format!("path {}", path))
+                    .unwrap_or_else(|| "path <unknown>".into())
+            }
+        })
+        .collect()
+}
+
+fn backup_candidates(
+    candidates: &[JsonValue],
+    prefix: &str,
+    report: &mut OperationReport,
+) -> Result<Vec<BackupEntry>, CliError> {
+    let mut paths = candidates
+        .iter()
+        .filter_map(|candidate| candidate["path"].as_str().map(str::to_string))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    let refs = paths.iter().map(|item| item.as_str()).collect::<Vec<_>>();
+    backup_paths(&refs, prefix, report)
+}
+
+fn backup_paths(
+    paths: &[&str],
+    prefix: &str,
+    report: &mut OperationReport,
+) -> Result<Vec<BackupEntry>, CliError> {
+    ensure_dir(Path::new(RECLAIM_BACKUP_DIR))?;
+    let mut backups = Vec::with_capacity(paths.len());
+    for path in paths {
+        let path_ref = Path::new(path);
+        let backup = backup_path(
+            path_ref,
+            Path::new(RECLAIM_BACKUP_DIR),
+            &format!("{}-{}", prefix, sanitize_path(path)),
+        )?;
+        append_backup(report, &backup);
+        backups.push(BackupEntry {
+            original_path: path_ref.to_path_buf(),
+            backup_path: backup,
+        });
+    }
+    Ok(backups)
+}
+
+fn sanitize_path(path: &str) -> String {
+    let sanitized = path.trim_start_matches('/').replace('/', "_");
+    if sanitized.is_empty() {
+        "root".into()
+    } else {
+        sanitized
+    }
+}
+
+fn rollback_backups(entries: &[BackupEntry], report: &mut OperationReport) -> Result<(), CliError> {
+    for entry in entries.iter().rev() {
+        if let Some(ref backup) = entry.backup_path {
+            restore_backup(backup, &entry.original_path)?;
+        }
+    }
+    report.rolled_back = Some(true);
+    Ok(())
+}
+
+fn rollback_error(
+    err: CliError,
+    backups: &[BackupEntry],
+    report: &mut OperationReport,
+    warning: &str,
+) -> CliError {
+    match rollback_backups(backups, report) {
+        Ok(()) => {
+            report.warnings.push(warning.into());
+            err.with_warnings(vec![warning.into()]).with_report(report)
+        }
+        Err(rollback_err) => {
+            report.rolled_back = Some(true);
+            report
+                .warnings
+                .push(format!("{} 回滚阶段再次失败: {}", warning, rollback_err));
+            CliError::new(format!("{}；回滚失败: {}", err.message, rollback_err))
+                .with_warnings(report.warnings.clone())
+                .with_report(report)
+        }
+    }
+}
+
 fn emit_success(
     format: OutputFormat,
     data: JsonValue,
@@ -523,6 +794,15 @@ fn emit_success(
                 for item in &report.backups {
                     println!("- {}", item);
                 }
+            }
+            if !report.changed_files.is_empty() {
+                println!("\n变更文件:");
+                for item in &report.changed_files {
+                    println!("- {}", item);
+                }
+            }
+            if let Some(rolled_back) = report.rolled_back {
+                println!("\n已自动回滚: {}", if rolled_back { "是" } else { "否" });
             }
         }
     }
