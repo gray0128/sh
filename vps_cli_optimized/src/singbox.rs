@@ -284,8 +284,7 @@ pub fn cli() -> Command {
                     Arg::new("id")
                         .long("id")
                         .value_name("ID")
-                        .help("要删除的节点 ID")
-                        .required(true),
+                        .help("要删除的节点 ID；交互模式下不传时会先列出节点供选择"),
                 )
                 .arg(
                     Arg::new("confirm")
@@ -604,48 +603,111 @@ fn list_nodes(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError
 }
 
 fn remove_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Result<(), CliError> {
-    let id = matches.get_one::<String>("id").unwrap().clone();
     let confirm_flag = matches.get_flag("confirm");
     let interactive = is_interactive(no_input);
+    let mut config = read_singbox_config().unwrap_or_else(default_singbox_config);
+    let id = match matches.get_one::<String>("id").cloned() {
+        Some(id) => id,
+        None if interactive => {
+            let choices = removable_node_choices(&config);
+            if choices.is_empty() {
+                return Err(CliError::new("当前没有可删除的节点"));
+            }
+            let labels = choices
+                .iter()
+                .map(|(_, label)| label.clone())
+                .collect::<Vec<_>>();
+            let idx = Select::new()
+                .with_prompt("请选择要删除的节点")
+                .items(&labels)
+                .default(0)
+                .interact()
+                .map_err(|e| CliError::new(format!("读取选择失败: {}", e)))?;
+            choices[idx].0.clone()
+        }
+        None => return Err(CliError::new("非交互模式下删除节点必须显式传入 --id")),
+    };
     require_confirmation(
         &format!("确认删除节点 {}？", id),
         interactive,
         false,
         confirm_flag,
     )?;
-    let mut config = read_singbox_config().unwrap_or_else(default_singbox_config);
-    let mut removed = false;
+    let mut removed_tag = None;
     if let Some(inbounds) = config.get_mut("inbounds").and_then(|v| v.as_array_mut()) {
         if id.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(idx) = id.parse::<usize>() {
                 if idx > 0 && idx <= inbounds.len() {
-                    inbounds.remove(idx - 1);
-                    removed = true;
+                    let removed = inbounds.remove(idx - 1);
+                    removed_tag = removed
+                        .get("tag")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| Some(id.clone()));
                 }
             }
-        } else {
-            if let Some(pos) = inbounds
-                .iter()
-                .position(|n| n.get("tag").and_then(|v| v.as_str()) == Some(id.as_str()))
-            {
-                inbounds.remove(pos);
-                removed = true;
-            }
+        } else if let Some(pos) = inbounds
+            .iter()
+            .position(|n| n.get("tag").and_then(|v| v.as_str()) == Some(id.as_str()))
+        {
+            let removed = inbounds.remove(pos);
+            removed_tag = removed
+                .get("tag")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| Some(id.clone()));
         }
     }
-    if !removed {
-        return Err(CliError::new(format!("未找到节点 {}", id)));
-    }
+    let removed_tag = match removed_tag {
+        Some(tag) => tag,
+        None => return Err(CliError::new(format!("未找到节点 {}", id))),
+    };
     let mut metas = read_node_meta()?;
-    metas.retain(|item| item.tag != id);
+    metas.retain(|item| item.tag != removed_tag);
     let report = apply_config_and_meta(&config, &metas)?;
     emit_success(
         format,
-        json!({"removed": id}),
+        json!({"removed": removed_tag}),
         &report,
         Some(vec![crumb("查看节点", "vps-cli singbox list-nodes --json")]),
     );
     Ok(())
+}
+
+fn removable_node_choices(config: &JsonValue) -> Vec<(String, String)> {
+    config
+        .get("inbounds")
+        .and_then(|v| v.as_array())
+        .map(|inbounds| {
+            inbounds
+                .iter()
+                .enumerate()
+                .map(|(idx, inbound)| {
+                    let tag = inbound
+                        .get("tag")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("{}", idx + 1));
+                    let node_type = inbound
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let port = inbound
+                        .get("listen_port")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or_default();
+                    let network = infer_network(inbound);
+                    (
+                        tag.clone(),
+                        format!(
+                            "{} | 类型: {} | 端口: {} | 协议: {}",
+                            tag, node_type, port, network
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 fn service_action(action: &str, format: OutputFormat) -> Result<(), CliError> {
@@ -2362,5 +2424,21 @@ mod tests {
     #[test]
     fn uri_component_percent_encodes_reserved_characters() {
         assert_eq!(uri_component("a+b c/=?"), "a%2Bb%20c%2F%3D%3F");
+    }
+
+    #[test]
+    fn removable_node_choices_uses_tag_and_summary() {
+        let config = json!({
+            "inbounds": [
+                {"tag": "vless-01", "type": "vless", "listen_port": 443},
+                {"tag": "hy2-01", "type": "hysteria2", "listen_port": 8443}
+            ]
+        });
+        let choices = removable_node_choices(&config);
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0].0, "vless-01");
+        assert!(choices[0].1.contains("vless-01"));
+        assert!(choices[0].1.contains("443"));
+        assert!(choices[1].1.contains("udp"));
     }
 }
