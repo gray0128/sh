@@ -2,6 +2,47 @@
 
 面向 VPS 场景的 Rust CLI，用于管理 `sing-box`、`mita/mieru` 和 SSH 加固。
 
+## 安装
+
+### 方式一：使用 Cargo 安装
+
+```bash
+cargo install --path .
+```
+
+安装完成后可直接执行：
+
+```bash
+vps-cli --help
+```
+
+### 方式二：本地构建后手动安装
+
+```bash
+cargo build --release
+sudo install -m 0755 target/release/vps-cli /usr/local/bin/vps-cli
+```
+
+### 方式三：使用 GitHub Actions 构建产物
+
+- 为仓库打上形如 `v1.2.3` 的 tag，或手动触发 `Build and Release` workflow。
+- 下载工作流产物中的 `vps-cli-<target>`。
+- 将二进制放到目标主机，例如：
+
+```bash
+sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
+```
+
+## 快速开始
+
+```bash
+vps-cli --help
+vps-cli singbox --help
+vps-cli mieru --help
+vps-cli reclaim --help
+vps-cli setup-ssh --help
+```
+
 ## 命令域
 
 - `setup-ssh`
@@ -37,13 +78,13 @@
 ### 安装 sing-box
 
 ```bash
-cargo run -- singbox install --confirm
+vps-cli singbox install --confirm
 ```
 
 ### 添加 VLESS + Reality 节点
 
 ```bash
-cargo run -- singbox add-vless-reality \
+vps-cli singbox add-vless-reality \
   --server example.com \
   --port 443 \
   --show-secrets \
@@ -53,20 +94,20 @@ cargo run -- singbox add-vless-reality \
 ### 查看节点列表
 
 ```bash
-cargo run -- singbox list-nodes
+vps-cli singbox list-nodes
 ```
 
 ### 安装 mita 并添加 mieru 节点
 
 ```bash
-cargo run -- mieru install --confirm
-cargo run -- mieru add-node --host example.com --port 8443 --protocol TCP --confirm
+vps-cli mieru install --confirm
+vps-cli mieru add-node --host example.com --port 8443 --protocol TCP --confirm
 ```
 
 ### 执行 SSH 加固
 
 ```bash
-cargo run -- setup-ssh \
+vps-cli setup-ssh \
   --port 2222 \
   --user alice \
   --pubkey-file ~/.ssh/id_ed25519.pub \
@@ -81,8 +122,8 @@ cargo run -- setup-ssh \
 ### 危险收口动作
 
 ```bash
-cargo run -- reclaim audit-proxies
-cargo run -- reclaim singbox-uninstall --confirm
+vps-cli reclaim audit-proxies
+vps-cli reclaim singbox-uninstall --confirm
 ```
 
 ## 输出约定

@@ -3,7 +3,7 @@ use std::process::Command;
 
 #[test]
 fn json_failure_contract_is_stable() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["--json", "--no-input", "singbox", "install"])
         .output()
         .expect("运行命令失败");
@@ -18,7 +18,7 @@ fn json_failure_contract_is_stable() {
 
 #[test]
 fn json_dry_run_success_contract_is_stable() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["--json", "singbox", "install", "--dry-run"])
         .output()
         .expect("运行命令失败");
@@ -32,7 +32,7 @@ fn json_dry_run_success_contract_is_stable() {
 
 #[test]
 fn reclaim_cleanup_requires_confirm_in_json_mode() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["--json", "--no-input", "reclaim", "singbox-purge"])
         .output()
         .expect("运行命令失败");

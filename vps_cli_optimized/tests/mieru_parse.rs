@@ -2,7 +2,7 @@ use std::process::Command;
 
 #[test]
 fn mieru_help_includes_expected_subcommands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["mieru", "--help"])
         .output()
         .expect("运行 mieru --help 失败");

@@ -8,6 +8,13 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 大部分命令需要在目标服务器上以 root 身份执行，但不涉及远程 API 鉴权。通过 SSH 登录服务器后，直接调用本工具即可。无需外部 token。
 
+## Build And Distribution
+
+- 实际安装后的二进制名为 `vps-cli`。
+- 本地安装可使用 `cargo install --path .`，或执行 `cargo build --release` 后手动安装 `target/release/vps-cli`。
+- GitHub Actions 的发布工作流位于仓库根目录 `.github/workflows/release.yml`，构建目录为 `vps_cli_optimized/`。
+- 工作流上传的产物名称格式为 `vps-cli-<target>`，便于在 Linux 主机上直接安装。
+
 ## Output Contract
 
 - 所有命令返回零 exit code 表示成功，非零表示失败。
@@ -97,3 +104,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 变更时间：2026-05-16
 本次变更概要：同步更新 vps-cli 的命令域设计、JSON 输出约定、安全/敏感视图、SSH 回滚语义，以及新增的 `mieru` 与 `reclaim` 命令组说明。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：补充 vps-cli 的实际二进制命名、安装方式和 GitHub Actions 构建产物约定，并对齐根目录工作流位置。

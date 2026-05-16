@@ -2,7 +2,7 @@ use std::process::Command;
 
 #[test]
 fn top_level_help_contains_new_command_groups() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .arg("--help")
         .output()
         .expect("运行 --help 失败");

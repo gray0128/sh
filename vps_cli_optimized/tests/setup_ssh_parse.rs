@@ -2,7 +2,7 @@ use std::process::Command;
 
 #[test]
 fn setup_ssh_help_includes_security_flags() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["setup-ssh", "--help"])
         .output()
         .expect("运行 setup-ssh --help 失败");

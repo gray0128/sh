@@ -2,7 +2,7 @@ use std::process::Command;
 
 #[test]
 fn reclaim_help_includes_dangerous_subcommands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["reclaim", "--help"])
         .output()
         .expect("运行 reclaim --help 失败");

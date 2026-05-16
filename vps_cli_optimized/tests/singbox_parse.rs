@@ -2,7 +2,7 @@ use std::process::Command;
 
 #[test]
 fn singbox_help_includes_protocol_commands() {
-    let output = Command::new(env!("CARGO_BIN_EXE_vps_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["singbox", "--help"])
         .output()
         .expect("运行 singbox --help 失败");
