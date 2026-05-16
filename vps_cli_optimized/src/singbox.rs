@@ -606,27 +606,14 @@ fn remove_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Re
     let confirm_flag = matches.get_flag("confirm");
     let interactive = is_interactive(no_input);
     let mut config = read_singbox_config().unwrap_or_else(default_singbox_config);
-    let id = match matches.get_one::<String>("id").cloned() {
-        Some(id) => id,
-        None if interactive => {
-            let choices = removable_node_choices(&config);
-            if choices.is_empty() {
-                return Err(CliError::new("当前没有可删除的节点"));
-            }
-            let labels = choices
-                .iter()
-                .map(|(_, label)| label.clone())
-                .collect::<Vec<_>>();
-            let idx = Select::new()
-                .with_prompt("请选择要删除的节点")
-                .items(&labels)
-                .default(0)
-                .interact()
-                .map_err(|e| CliError::new(format!("读取选择失败: {}", e)))?;
-            choices[idx].0.clone()
-        }
-        None => return Err(CliError::new("非交互模式下删除节点必须显式传入 --id")),
-    };
+    let id = resolve_required_config_node_id(
+        matches.get_one::<String>("id").cloned(),
+        &config,
+        interactive,
+        "请选择要删除的节点",
+        "当前没有可删除的节点",
+        "非交互模式下删除节点必须显式传入 --id",
+    )?;
     require_confirmation(
         &format!("确认删除节点 {}？", id),
         interactive,
@@ -708,6 +695,50 @@ fn removable_node_choices(config: &JsonValue) -> Vec<(String, String)> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default()
+}
+
+fn resolve_optional_config_node_id(
+    id: Option<String>,
+    config: &JsonValue,
+    interactive: bool,
+    prompt: &str,
+    empty_message: &str,
+) -> Result<Option<String>, CliError> {
+    match id {
+        Some(id) => Ok(Some(id)),
+        None if interactive => {
+            let choices = removable_node_choices(config);
+            if choices.is_empty() {
+                return Err(CliError::new(empty_message));
+            }
+            let labels = choices
+                .iter()
+                .map(|(_, label)| label.clone())
+                .collect::<Vec<_>>();
+            let idx = Select::new()
+                .with_prompt(prompt)
+                .items(&labels)
+                .default(0)
+                .interact()
+                .map_err(|e| CliError::new(format!("读取选择失败: {}", e)))?;
+            Ok(Some(choices[idx].0.clone()))
+        }
+        None => Ok(None),
+    }
+}
+
+fn resolve_required_config_node_id(
+    id: Option<String>,
+    config: &JsonValue,
+    interactive: bool,
+    prompt: &str,
+    empty_message: &str,
+    missing_message: &str,
+) -> Result<String, CliError> {
+    match resolve_optional_config_node_id(id, config, interactive, prompt, empty_message)? {
+        Some(id) => Ok(id),
+        None => Err(CliError::new(missing_message)),
+    }
 }
 
 fn removable_meta_choices(metas: &[NodeMeta]) -> Vec<(String, String)> {
@@ -1900,26 +1931,13 @@ fn show_config(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Re
         emit_success(format, config, &report, None);
     } else {
         let interactive = is_interactive(no_input);
-        let selected = if interactive {
-            let choices = removable_node_choices(&config);
-            if choices.is_empty() {
-                None
-            } else {
-                let labels = choices
-                    .iter()
-                    .map(|(_, label)| label.clone())
-                    .collect::<Vec<_>>();
-                let idx = Select::new()
-                    .with_prompt("请选择要查看配置的节点")
-                    .items(&labels)
-                    .default(0)
-                    .interact()
-                    .map_err(|e| CliError::new(format!("读取选择失败: {}", e)))?;
-                Some(choices[idx].0.clone())
-            }
-        } else {
-            None
-        };
+        let selected = resolve_optional_config_node_id(
+            None,
+            &config,
+            interactive,
+            "请选择要查看配置的节点",
+            "当前没有可选择的节点",
+        )?;
         if let Some(tag) = selected {
             let inbound = find_inbound_by_tag(&config, &tag)
                 .ok_or_else(|| CliError::new(format!("未找到节点 {}", tag)))?;
@@ -2576,6 +2594,16 @@ mod tests {
     fn resolve_optional_meta_id_returns_none_in_non_interactive_mode() {
         let selected = resolve_optional_meta_id(None, &[], false, "ignored").unwrap();
         assert!(selected.is_none());
+    }
+
+    #[test]
+    fn resolve_required_config_node_id_requires_id_in_non_interactive_mode() {
+        let config =
+            json!({"inbounds": [{"tag": "vless-01", "type": "vless", "listen_port": 443}]});
+        let err =
+            resolve_required_config_node_id(None, &config, false, "ignored", "empty", "missing")
+                .unwrap_err();
+        assert!(err.message.contains("missing"));
     }
 
     #[test]
