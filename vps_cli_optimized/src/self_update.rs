@@ -40,7 +40,7 @@ pub fn upgrade_cli() -> Command {
             Arg::new("version")
                 .long("version")
                 .value_name("VERSION")
-                .help("指定目标版本，例如 0.1.1；默认尝试升级到最新 release"),
+                .help("指定目标版本，例如 0.2.0；默认尝试升级到最新 release"),
         )
         .arg(
             Arg::new("check")
@@ -456,7 +456,7 @@ mod tests {
 
     #[test]
     fn version_compare_works() {
-        assert_eq!(compare_versions("0.1.1", "0.1.1").unwrap(), 0);
+        assert_eq!(compare_versions("0.2.0", "0.2.0").unwrap(), 0);
         assert_eq!(compare_versions("0.1.1", "0.2.0").unwrap(), -1);
         assert_eq!(compare_versions("1.2.0", "1.1.9").unwrap(), 1);
     }
@@ -464,14 +464,14 @@ mod tests {
     #[test]
     fn release_url_matches_arch() {
         assert_eq!(
-            release_archive_url("0.1.1", "amd64"),
-            "https://github.com/gray0128/sh/releases/download/v0.1.1/vps-cli-linux-amd64.tar.gz"
+            release_archive_url("0.2.0", "amd64"),
+            "https://github.com/gray0128/sh/releases/download/v0.2.0/vps-cli-linux-amd64.tar.gz"
         );
     }
 
     #[test]
     fn release_version_validation_rejects_invalid_values() {
-        assert!(normalize_release_version("v0.1.1").is_ok());
+        assert!(normalize_release_version("v0.2.0").is_ok());
         assert!(normalize_release_version("latest").is_err());
     }
 }

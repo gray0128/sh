@@ -16,7 +16,7 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 - Release 资产名称固定为：
   - `vps-cli-linux-amd64.tar.gz`
   - `vps-cli-linux-arm64.tar.gz`
-- 当前约定的最新 release 版本先按 `0.1.1` 处理。
+- 当前约定的最新 release 版本先按 `0.2.0` 处理。
 
 ## Output Contract
 
@@ -157,3 +157,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 变更时间：2026-05-16
 本次变更概要：新增独立 `trusttunnel` 命令域，支持包装官方安装脚本安装/更新 TrustTunnel 服务端、执行 `setup_wizard`、导出客户端配置，并在 `reclaim` 中补充 TrustTunnel 的卸载与彻底清理动作。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：同步发布版本线到 `0.2.0`，更新最新 release 版本约定，用于发布 `v0.2.0`。

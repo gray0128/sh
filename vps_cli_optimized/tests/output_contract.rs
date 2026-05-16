@@ -86,8 +86,8 @@ fn version_json_contains_current_version() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let payload: Value = serde_json::from_str(&stdout).expect("stdout 不是 JSON");
     assert_eq!(payload["ok"], true);
-    assert_eq!(payload["data"]["current_version"], "0.1.1");
-    assert_eq!(payload["data"]["latest_release_version"], "0.1.1");
+    assert_eq!(payload["data"]["current_version"], "0.2.0");
+    assert_eq!(payload["data"]["latest_release_version"], "0.2.0");
 }
 
 #[test]
