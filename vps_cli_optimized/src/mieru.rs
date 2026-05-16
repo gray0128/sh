@@ -454,21 +454,14 @@ fn remove_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Re
         Some(id) => id,
         None if interactive => {
             let nodes = read_nodes()?;
-            let choices = removable_node_choices(&nodes);
-            if choices.is_empty() {
-                return Err(CliError::new("当前没有可删除的 mieru 节点"));
-            }
-            let labels = choices
-                .iter()
-                .map(|(_, label)| label.clone())
-                .collect::<Vec<_>>();
-            let selection = Select::new()
-                .with_prompt("请选择要删除的 mieru 节点")
-                .items(&labels)
-                .default(0)
-                .interact()
-                .map_err(|e| CliError::new(format!("读取节点选择失败: {}", e)))?;
-            choices[selection].0.clone()
+            resolve_required_node_id(
+                None,
+                &nodes,
+                true,
+                "请选择要删除的 mieru 节点",
+                "当前没有可删除的 mieru 节点",
+                "非交互模式下删除节点必须显式传入 --id",
+            )?
         }
         None => return Err(CliError::new("非交互模式下删除节点必须显式传入 --id")),
     };
@@ -596,6 +589,20 @@ fn resolve_optional_node_id(
             Ok(Some(choices[selection].0.clone()))
         }
         None => Ok(None),
+    }
+}
+
+fn resolve_required_node_id(
+    id: Option<String>,
+    nodes: &[MieruNode],
+    interactive: bool,
+    prompt: &str,
+    _empty_message: &str,
+    missing_message: &str,
+) -> Result<String, CliError> {
+    match resolve_optional_node_id(id, nodes, interactive, prompt)? {
+        Some(id) => Ok(id),
+        None => Err(CliError::new(missing_message)),
     }
 }
 
@@ -1321,5 +1328,24 @@ mod tests {
         let nodes = vec![];
         let selected = resolve_optional_node_id(None, &nodes, false, "ignored").unwrap();
         assert!(selected.is_none());
+    }
+
+    #[test]
+    fn resolve_required_node_id_requires_id_in_non_interactive_mode() {
+        let nodes = vec![MieruNode {
+            node_type: "mieru".into(),
+            tag: "demo".into(),
+            host: "example.com".into(),
+            port: 8443,
+            protocol: "TCP".into(),
+            username: "alice".into(),
+            password: "secret".into(),
+            link: "mierus://...".into(),
+            client: json!({}),
+            created_at: "2026-05-16T00:00:00Z".into(),
+        }];
+        let err = resolve_required_node_id(None, &nodes, false, "ignored", "empty", "missing")
+            .unwrap_err();
+        assert!(err.message.contains("missing"));
     }
 }
