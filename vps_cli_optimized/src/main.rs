@@ -1,5 +1,6 @@
 use clap::{Arg, Command};
 
+mod firewall;
 mod mieru;
 mod reclaim;
 mod safety;
@@ -9,6 +10,7 @@ mod singbox;
 mod trusttunnel;
 mod utils;
 
+use firewall::handle_firewall;
 use mieru::handle_mieru;
 use reclaim::handle_reclaim;
 use self_update::{handle_upgrade, handle_version};
@@ -45,6 +47,7 @@ fn build_cli() -> Command {
         .subcommand(self_update::version_cli())
         .subcommand(self_update::upgrade_cli())
         .subcommand(setup_ssh::cli())
+        .subcommand(firewall::cli())
         .subcommand(singbox::cli())
         .subcommand(trusttunnel::cli())
         .subcommand(mieru::cli())
@@ -79,6 +82,11 @@ fn main() {
         }
         Some(("setup-ssh", sub)) => {
             if let Err(err) = handle_setup_ssh(sub, output_format, no_input) {
+                err.output_and_exit(output_format);
+            }
+        }
+        Some(("firewall", sub)) => {
+            if let Err(err) = handle_firewall(sub, output_format, no_input) {
                 err.output_and_exit(output_format);
             }
         }

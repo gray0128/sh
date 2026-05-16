@@ -12,6 +12,7 @@ fn top_level_help_contains_new_command_groups() {
     assert!(stdout.contains("version"));
     assert!(stdout.contains("upgrade"));
     assert!(stdout.contains("setup-ssh"));
+    assert!(stdout.contains("firewall"));
     assert!(stdout.contains("singbox"));
     assert!(stdout.contains("trusttunnel"));
     assert!(stdout.contains("mieru"));
