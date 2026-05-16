@@ -59,3 +59,37 @@ fn version_json_contains_current_version() {
     assert_eq!(payload["data"]["current_version"], "0.1.0");
     assert_eq!(payload["data"]["latest_release_version"], "0.1.0");
 }
+
+#[test]
+fn mieru_add_node_show_secrets_only_returns_follow_up_commands() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
+        .args([
+            "--json",
+            "--no-input",
+            "mieru",
+            "add-node",
+            "--host",
+            "example.com",
+            "--port",
+            "8443",
+            "--protocol",
+            "TCP",
+            "--dry-run",
+            "--confirm",
+            "--show-secrets",
+        ])
+        .output()
+        .expect("运行命令失败");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: Value = serde_json::from_str(&stdout).expect("stdout 不是 JSON");
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["data"]["sensitive_output_split"], true);
+    assert!(payload["data"]["simple_link"].is_null());
+    assert!(payload["data"]["client_json"].is_null());
+    assert_eq!(
+        payload["data"]["next_steps"]["show_simple_links"],
+        "vps-cli mieru show-simple-links --show-secrets"
+    );
+}

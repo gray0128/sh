@@ -48,6 +48,18 @@ struct NodeSummary {
     network: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
 pub fn cli() -> Command {
     Command::new("singbox")
         .about("管理 sing-box 服务端安装、协议节点与运行状态")
@@ -342,23 +354,31 @@ fn install_singbox(
         confirm_flag,
     )?;
 
+    let arch = detect_arch().ok_or_else(|| CliError::new("无法识别当前 CPU 架构"))?;
+
     if dry_run {
+        let version_preview = version
+            .as_deref()
+            .map(normalize_version)
+            .transpose()?
+            .unwrap_or_else(|| "latest-stable".to_string());
         emit_success(
             format,
-            json!({"dry_run": true, "version": version, "config": SINGBOX_CONFIG_PATH }),
+            json!({
+                "dry_run": true,
+                "version": version_preview,
+                "arch": arch,
+                "config": SINGBOX_CONFIG_PATH
+            }),
             &OperationReport::default(),
             Some(vec![crumb("执行安装", "vps-cli singbox install --confirm")]),
         );
         return Ok(());
     }
 
-    let version_str = version.clone().unwrap_or_else(|| "latest".to_string());
-    let arch = detect_arch().ok_or_else(|| CliError::new("无法识别当前 CPU 架构"))?;
-    let download_url = if version_str == "latest" {
-        format!("https://github.com/SagerNet/sing-box/releases/latest/download/sing-box-linux-{arch}.tar.gz")
-    } else {
-        format!("https://github.com/SagerNet/sing-box/releases/download/v{version}/sing-box-{version}-linux-{arch}.tar.gz", version = version_str, arch = arch)
-    };
+    let release = resolve_singbox_release(version.as_deref(), arch)?;
+    let version_str = release.version.clone();
+    let download_url = release.download_url.clone();
     let tmp_dir = PathBuf::from(format!("/tmp/singbox-install-{}", version_str));
     let _ = fs::remove_dir_all(&tmp_dir);
     let _ = fs::create_dir_all(&tmp_dir);
@@ -376,27 +396,7 @@ fn install_singbox(
         }
     }
     extract_tar(&tar_path, &tmp_dir).map_err(|e| CliError::new(format!("解压失败: {}", e)))?;
-    let extracted_subdir = if version_str == "latest" {
-        let entries: Vec<_> = fs::read_dir(&tmp_dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .collect();
-        let mut target: Option<PathBuf> = None;
-        for e in entries {
-            let name = e.file_name().into_string().unwrap_or_default();
-            if name.starts_with("sing-box") {
-                target = Some(e.path());
-                break;
-            }
-        }
-        target.ok_or_else(|| CliError::new("未找到解压后的 sing-box 目录"))?
-    } else {
-        tmp_dir.join(format!(
-            "sing-box-{version}-linux-{arch}",
-            version = version_str,
-            arch = arch
-        ))
-    };
+    let extracted_subdir = find_extracted_singbox_dir(&tmp_dir)?;
     install_binary(&extracted_subdir)
         .map_err(|e| CliError::new(format!("安装二进制失败: {}", e)))?;
     create_system_user().map_err(|e| CliError::new(format!("创建系统用户失败: {}", e)))?;
@@ -415,7 +415,14 @@ fn install_singbox(
     report.changed_files.push(SINGBOX_CONFIG_PATH.into());
     emit_success(
         format,
-        json!({"installed": true, "version": version_str, "arch": arch, "url": download_url }),
+        json!({
+            "installed": true,
+            "version": version_str,
+            "tag": release.tag,
+            "arch": arch,
+            "asset": release.asset_name,
+            "url": download_url
+        }),
         &report,
         Some(vec![
             crumb("添加节点", "vps-cli singbox add-vless-reality --confirm"),
@@ -833,6 +840,92 @@ fn emit_success(
             }
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct SingboxReleaseSelection {
+    tag: String,
+    version: String,
+    asset_name: String,
+    download_url: String,
+}
+
+fn resolve_singbox_release(
+    version: Option<&str>,
+    arch: &str,
+) -> Result<SingboxReleaseSelection, CliError> {
+    let version = version.map(normalize_version).transpose()?;
+    let api_url = match version.as_deref() {
+        Some(v) => format!(
+            "https://api.github.com/repos/SagerNet/sing-box/releases/tags/v{}",
+            v
+        ),
+        None => "https://api.github.com/repos/SagerNet/sing-box/releases/latest".to_string(),
+    };
+    let release = fetch_github_release(&api_url)?;
+    let normalized = normalize_version(&release.tag_name)?;
+    let asset_name = format!("sing-box-{}-linux-{}.tar.gz", normalized, arch);
+    let asset = release
+        .assets
+        .iter()
+        .find(|item| item.name == asset_name)
+        .ok_or_else(|| {
+            CliError::new(format!(
+                "未在 sing-box release {} 中找到适用于 {} 的安装包 {}",
+                release.tag_name, arch, asset_name
+            ))
+        })?;
+    Ok(SingboxReleaseSelection {
+        tag: release.tag_name,
+        version: normalized,
+        asset_name,
+        download_url: asset.browser_download_url.clone(),
+    })
+}
+
+fn fetch_github_release(url: &str) -> Result<GitHubRelease, CliError> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("vps-cli/0.1.0")
+        .build()
+        .map_err(|e| CliError::new(format!("创建 GitHub 请求失败: {}", e)))?;
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| CliError::new(format!("请求 sing-box release 信息失败: {}", e)))?;
+    if !response.status().is_success() {
+        return Err(CliError::new(format!(
+            "请求 sing-box release 信息失败：HTTP {}",
+            response.status()
+        )));
+    }
+    let body = response
+        .text()
+        .map_err(|e| CliError::new(format!("读取 sing-box release 响应失败: {}", e)))?;
+    serde_json::from_str::<GitHubRelease>(&body)
+        .map_err(|e| CliError::new(format!("解析 sing-box release 信息失败: {}", e)))
+}
+
+fn normalize_version(value: &str) -> Result<String, CliError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(CliError::new("sing-box 版本不能为空"));
+    }
+    Ok(trimmed.trim_start_matches('v').to_string())
+}
+
+fn find_extracted_singbox_dir(tmp_dir: &Path) -> Result<PathBuf, CliError> {
+    let entries =
+        fs::read_dir(tmp_dir).map_err(|e| CliError::new(format!("读取解压目录失败: {}", e)))?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = entry.file_name().into_string().unwrap_or_default();
+            if name.starts_with("sing-box-") {
+                return Ok(path);
+            }
+        }
+    }
+    Err(CliError::new("未找到解压后的 sing-box 目录"))
 }
 
 fn crumb(action: &str, cmd: &str) -> Breadcrumb {
@@ -2051,4 +2144,35 @@ fn ss_userinfo(method: &str, password: &str) -> String {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_version_accepts_plain_and_prefixed_values() {
+        assert_eq!(normalize_version("1.13.12").unwrap(), "1.13.12");
+        assert_eq!(normalize_version("v1.13.12").unwrap(), "1.13.12");
+    }
+
+    #[test]
+    fn find_release_asset_uses_real_asset_name() {
+        let release = GitHubRelease {
+            tag_name: "v1.13.12".into(),
+            assets: vec![GitHubAsset {
+                name: "sing-box-1.13.12-linux-amd64.tar.gz".into(),
+                browser_download_url: "https://example.invalid/sing-box-1.13.12-linux-amd64.tar.gz"
+                    .into(),
+            }],
+        };
+        let normalized = normalize_version(&release.tag_name).unwrap();
+        let asset_name = format!("sing-box-{}-linux-{}.tar.gz", normalized, "amd64");
+        let asset = release
+            .assets
+            .iter()
+            .find(|item| item.name == asset_name)
+            .unwrap();
+        assert_eq!(asset.name, "sing-box-1.13.12-linux-amd64.tar.gz");
+    }
 }

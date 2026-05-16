@@ -58,7 +58,7 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 ### 安装 sing-box 并添加节点
 
-1. `vps-cli singbox install --json --confirm` — 安装或更新 sing-box。  
+1. `vps-cli singbox install --json --confirm` — 安装或更新 sing-box；未指定版本时会在真正执行安装时自动解析最新稳定版 release 的真实 Linux 安装包。  
 2. `vps-cli singbox add-vless-reality --server example.com --port 443 --json --confirm` — 用协议向导生成服务端入站并输出结构化结果。  
 3. `vps-cli singbox list-nodes --json` — 查看安全视图。  
 4. `vps-cli singbox show-links --show-secrets --json` — 在显式确认后查看敏感链接或客户端 JSON。  
@@ -72,7 +72,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 3. `vps-cli mieru list-nodes --json` — 查看安全视图。  
 4. `vps-cli mieru show-simple-links --show-secrets --json` — 查看 simple 分享链接 `mierus://`。  
 5. `vps-cli mieru show-standard-links --show-secrets --json` — 查看标准分享链接 `mieru://`。  
-5. `vps-cli mieru status --json` — 检查 systemd 状态与 mita 状态。
+6. `vps-cli mieru status --json` — 检查 systemd 状态与 mita 状态。  
+7. `vps-cli mieru add-node --show-secrets --json --confirm` — 仅返回敏感信息查看入口，不再在添加结果中直接内联分享链接。
 
 ### 加固 SSH
 
@@ -127,3 +128,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 变更时间：2026-05-16
 本次变更概要：为 `mieru` 增加 simple/standard 分享链接独立命令，并在交互式添加节点时显式询问 `TCP/UDP` 协议。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：将 `mieru add-node --show-secrets` 调整为只返回敏感查看入口，并修复 `singbox install` 默认最新稳定版解析官方 release 资产名导致的下载 404 问题。

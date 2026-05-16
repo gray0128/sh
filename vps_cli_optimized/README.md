@@ -291,6 +291,12 @@ vps-cli mieru add-node
 vps-cli singbox install --confirm
 ```
 
+说明：
+
+- 留空版本时会自动查询 GitHub 上的最新稳定版 release，再选择与你当前架构匹配的真实安装包
+- 指定版本时支持 `1.13.12` 和 `v1.13.12` 两种写法
+- 当前会自动匹配官方资产名，例如 `sing-box-1.13.12-linux-amd64.tar.gz`
+
 指定版本并校验 SHA256：
 
 ```bash
@@ -310,7 +316,7 @@ vps-cli singbox add-vless-reality \
 说明：
 
 - 如果未显式提供全部参数，交互模式下会继续询问
-- 如需直接拿到链接或客户端 JSON，可附加 `--show-secrets`
+- `mieru add-node --show-secrets` 现在不会在添加结果里直接内联敏感链接；只会返回后续查看命令，敏感内容统一改为通过独立命令查看
 
 ### 查看节点列表
 
@@ -364,6 +370,19 @@ vps-cli mieru show-simple-links --show-secrets
 查看标准分享链接：
 
 ```bash
+vps-cli mieru show-standard-links --show-secrets
+```
+
+如果添加节点时带了 `--show-secrets`，返回结果只会提示下一步怎么查看：
+
+```bash
+vps-cli mieru add-node --host example.com --port 8443 --protocol TCP --show-secrets --confirm
+```
+
+随后按需执行：
+
+```bash
+vps-cli mieru show-simple-links --show-secrets
 vps-cli mieru show-standard-links --show-secrets
 ```
 
@@ -523,3 +542,8 @@ vps-cli setup-ssh --help
 
 变更时间：2026-05-16
 本次变更概要：为 `mieru` 新增 simple/standard 分享链接的独立命令，并在交互式 `add-node` 中加入 `TCP/UDP` 协议选择提示。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：将 `mieru add-node --show-secrets` 调整为只返回敏感查看入口，并修复 `singbox install` 在默认最新稳定版下解析官方 release 资产名导致的 404 问题。

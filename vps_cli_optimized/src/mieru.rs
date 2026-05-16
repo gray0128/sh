@@ -338,7 +338,18 @@ fn add_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Resul
         }
         emit_success(
             format,
-            json!({"dry_run": true, "tag": tag, "protocol": protocol, "port": port, "simple_link": if show_secrets { Some(link) } else { None::<String> }, "client_json": if show_secrets { Some(client_json) } else { None::<JsonValue> }}),
+            json!({
+                "dry_run": true,
+                "tag": tag,
+                "protocol": protocol,
+                "port": port,
+                "host": host,
+                "sensitive_output_split": true,
+                "next_steps": {
+                    "show_simple_links": "vps-cli mieru show-simple-links --show-secrets",
+                    "show_standard_links": "vps-cli mieru show-standard-links --show-secrets"
+                }
+            }),
             &report,
             Some(vec![
                 crumb("执行写入", "vps-cli mieru add-node --confirm"),
@@ -367,12 +378,20 @@ fn add_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Resul
         report.sensitive = Some(true);
         report
             .warnings
-            .push("当前输出包含敏感凭据，不应贴入公开日志。".into());
+            .push("已按独立命令拆分敏感输出；请使用 `show-simple-links` 或 `show-standard-links` 查看链接。".into());
     }
-    let mut data = json!({"added": tag, "protocol": protocol, "port": port});
+    let mut data = json!({
+        "added": tag,
+        "protocol": protocol,
+        "port": port,
+        "host": host,
+        "sensitive_output_split": true
+    });
     if show_secrets {
-        data["simple_link"] = json!(node.link);
-        data["client_json"] = node.client;
+        data["next_steps"] = json!({
+            "show_simple_links": "vps-cli mieru show-simple-links --show-secrets",
+            "show_standard_links": "vps-cli mieru show-standard-links --show-secrets"
+        });
     }
     emit_success(
         format,
