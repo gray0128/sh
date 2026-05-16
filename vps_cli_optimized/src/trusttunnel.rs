@@ -1,4 +1,5 @@
 use clap::{Arg, ArgAction, ArgMatches, Command, ValueHint};
+use dialoguer::Input;
 use serde_json::{json, Value as JsonValue};
 use std::env;
 use std::fs;
@@ -130,14 +131,12 @@ pub fn cli() -> Command {
                     Arg::new("client")
                         .long("client")
                         .value_name("NAME")
-                        .required(true)
                         .help("导出的客户端名称，映射 trusttunnel_endpoint -c"),
                 )
                 .arg(
                     Arg::new("address")
                         .long("address")
                         .value_name("ADDR")
-                        .required(true)
                         .help("客户端连接地址，映射 trusttunnel_endpoint -a"),
                 )
                 .arg(
@@ -247,7 +246,7 @@ pub fn handle_trusttunnel(
         Some(("restart", _)) => service_action("restart", format),
         Some(("logs", sub)) => show_logs(sub, format, no_input),
         Some(("setup-wizard", sub)) => run_setup_wizard(sub, format, no_input),
-        Some(("export-config", sub)) => export_config(sub, format),
+        Some(("export-config", sub)) => export_config(sub, format, no_input),
         Some(("uninstall", sub)) => uninstall_trusttunnel(sub, format, no_input),
         Some(("purge", sub)) => purge_trusttunnel(sub, format, no_input),
         _ => Err(CliError::new("未知子命令")),
@@ -570,7 +569,12 @@ fn run_setup_wizard(
     Ok(())
 }
 
-fn export_config(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError> {
+fn export_config(
+    matches: &ArgMatches,
+    format: OutputFormat,
+    no_input: bool,
+) -> Result<(), CliError> {
+    let interactive = is_interactive(no_input);
     let install_dir = normalized_install_dir(matches.get_one::<String>("install-dir"));
     let binary_path = trusttunnel_binary_path(&install_dir);
     if !binary_path.exists() {
@@ -597,8 +601,20 @@ fn export_config(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliEr
                 .display()
                 .to_string()
         });
-    let client = matches.get_one::<String>("client").unwrap().clone();
-    let address = matches.get_one::<String>("address").unwrap().clone();
+    let inferred_client = matches
+        .get_one::<String>("client")
+        .cloned()
+        .or_else(|| infer_first_client_name(&settings).ok().flatten());
+    let inferred_address = matches
+        .get_one::<String>("address")
+        .cloned()
+        .or_else(|| infer_default_address(&hosts).ok().flatten());
+    let client = required_or_prompt(inferred_client, "请输入导出的客户端名称", interactive)?;
+    let address = required_or_prompt(
+        inferred_address,
+        "请输入客户端连接地址（优先域名，可带端口）",
+        interactive,
+    )?;
     let export_format = matches.get_one::<String>("format").unwrap().clone();
     let show_secrets = matches.get_flag("show-secrets");
 
@@ -751,6 +767,67 @@ fn trusttunnel_service_template_path(install_dir: &str) -> PathBuf {
     Path::new(install_dir).join(TRUSTTUNNEL_SERVICE_TEMPLATE)
 }
 
+fn infer_first_client_name(settings_path: &str) -> Result<Option<String>, CliError> {
+    let credentials_path = resolve_credentials_path(settings_path)?;
+    first_toml_string_value(&credentials_path, "username")
+}
+
+fn infer_default_address(hosts_path: &str) -> Result<Option<String>, CliError> {
+    first_toml_string_value(Path::new(hosts_path), "hostname")
+}
+
+fn resolve_credentials_path(settings_path: &str) -> Result<PathBuf, CliError> {
+    let settings_path = Path::new(settings_path);
+    let base_dir = settings_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let configured = first_toml_string_value(settings_path, "credentials_file")?;
+    Ok(match configured {
+        Some(path) => {
+            let path = PathBuf::from(path);
+            if path.is_absolute() {
+                path
+            } else {
+                base_dir.join(path)
+            }
+        }
+        None => base_dir.join("credentials.toml"),
+    })
+}
+
+fn first_toml_string_value(path: &Path, key: &str) -> Result<Option<String>, CliError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|e| CliError::new(format!("读取配置文件失败 {}: {}", path.display(), e)))?;
+    for line in content.lines() {
+        if let Some(value) = parse_toml_string_assignment(line, key) {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+fn parse_toml_string_assignment(line: &str, key: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() || trimmed.starts_with('#') {
+        return None;
+    }
+    let (lhs, rhs) = trimmed.split_once('=')?;
+    if lhs.trim() != key {
+        return None;
+    }
+    parse_toml_string_literal(rhs.trim())
+}
+
+fn parse_toml_string_literal(value: &str) -> Option<String> {
+    let value = value.strip_prefix('"')?;
+    let end = value.find('"')?;
+    Some(value[..end].to_string())
+}
+
 fn sync_service_template(template_path: &Path, service_path: &Path) -> Result<bool, CliError> {
     if !template_path.exists() {
         return Err(CliError::new(format!(
@@ -881,6 +958,21 @@ fn non_empty_text(bytes: &[u8]) -> Option<String> {
     }
 }
 
+fn required_or_prompt(
+    value: Option<String>,
+    prompt: &str,
+    interactive: bool,
+) -> Result<String, CliError> {
+    match value {
+        Some(v) if !v.trim().is_empty() => Ok(v),
+        _ if interactive => Input::<String>::new()
+            .with_prompt(prompt)
+            .interact_text()
+            .map_err(|e| CliError::new(format!("读取输入失败: {}", e))),
+        _ => Err(CliError::new(format!("缺少必需参数：{}", prompt))),
+    }
+}
+
 fn command_failed(prefix: &str, stdout: &[u8], stderr: &[u8]) -> CliError {
     let stdout = String::from_utf8_lossy(stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(stderr).trim().to_string();
@@ -932,7 +1024,10 @@ fn crumb(action: &str, cmd: &str) -> Breadcrumb {
 
 #[cfg(test)]
 mod tests {
-    use super::sync_service_template;
+    use super::{
+        infer_default_address, infer_first_client_name, parse_toml_string_assignment,
+        resolve_credentials_path, sync_service_template,
+    };
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -982,6 +1077,77 @@ mod tests {
         let changed = sync_service_template(&template, &service).unwrap();
 
         assert!(!changed);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_toml_string_assignment_extracts_value() {
+        assert_eq!(
+            parse_toml_string_assignment(r#"hostname = "vpn.example.com""#, "hostname"),
+            Some("vpn.example.com".into())
+        );
+        assert_eq!(
+            parse_toml_string_assignment(r#"username = "user1""#, "username"),
+            Some("user1".into())
+        );
+    }
+
+    #[test]
+    fn infer_default_address_reads_first_hostname() {
+        let dir = temp_test_dir("hosts");
+        fs::create_dir_all(&dir).unwrap();
+        let hosts = dir.join("hosts.toml");
+        fs::write(
+            &hosts,
+            r#"
+[[main_hosts]]
+hostname = "vpn.example.com"
+
+[[ping_hosts]]
+hostname = "ping.example.com"
+"#,
+        )
+        .unwrap();
+
+        let address = infer_default_address(hosts.to_str().unwrap()).unwrap();
+
+        assert_eq!(address.as_deref(), Some("vpn.example.com"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn infer_first_client_name_uses_credentials_file_from_settings() {
+        let dir = temp_test_dir("credentials");
+        fs::create_dir_all(dir.join("config")).unwrap();
+        let settings = dir.join("config").join("vpn.toml");
+        let credentials = dir.join("config").join("creds.toml");
+        fs::write(&settings, r#"credentials_file = "creds.toml""#).unwrap();
+        fs::write(
+            &credentials,
+            r#"
+[[client]]
+username = "demo-user"
+password = "secret"
+"#,
+        )
+        .unwrap();
+
+        let client = infer_first_client_name(settings.to_str().unwrap()).unwrap();
+
+        assert_eq!(client.as_deref(), Some("demo-user"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_credentials_path_falls_back_to_default_filename() {
+        let dir = temp_test_dir("settings-default");
+        fs::create_dir_all(&dir).unwrap();
+        let settings = dir.join("vpn.toml");
+        fs::write(&settings, "listen_address = \"0.0.0.0:443\"").unwrap();
+
+        let resolved = resolve_credentials_path(settings.to_str().unwrap()).unwrap();
+
+        assert_eq!(resolved, dir.join("credentials.toml"));
         let _ = fs::remove_dir_all(&dir);
     }
 }
