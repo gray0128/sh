@@ -1114,6 +1114,12 @@ fn protocol_command(name: &'static str, about: &'static str, network: &'static s
 fn tls_protocol_command(name: &'static str, about: &'static str, network: &'static str) -> Command {
     protocol_command(name, about, network)
         .arg(
+            Arg::new("server-name")
+                .long("server-name")
+                .value_name("SNI")
+                .help("TLS SNI / 证书域名；默认与 --server 相同"),
+        )
+        .arg(
             Arg::new("cert-path")
                 .long("cert-path")
                 .value_name("FILE")
@@ -1269,11 +1275,15 @@ fn add_trojan_tls(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("trojan-{}", short_hex(4)));
+    let server_name = matches
+        .get_one::<String>("server-name")
+        .cloned()
+        .unwrap_or_else(|| server.clone());
     let password = matches
         .get_one::<String>("password")
         .cloned()
         .unwrap_or_else(|| random_b64url(24));
-    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server)?;
+    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server_name)?;
     let listen = matches
         .get_one::<String>("listen")
         .cloned()
@@ -1284,20 +1294,20 @@ fn add_trojan_tls(
         "listen": listen,
         "listen_port": port,
         "users": [{"name": "default", "password": password}],
-        "tls": {"enabled": true, "server_name": server, "certificate_path": cert_path, "key_path": key_path}
+        "tls": {"enabled": true, "server_name": server_name, "certificate_path": cert_path, "key_path": key_path}
     });
     let link = format!(
         "trojan://{}@{}:{}?security=tls&sni={}{}#{}",
         password,
         format_uri_host(&server),
         port,
-        server,
+        server_name,
         if insecure { "&allowInsecure=1" } else { "" },
         tag
     );
     let client_json = json!({
         "type":"trojan","tag":tag,"server":server,"server_port":port,"password":password,
-        "tls":{"enabled":true,"server_name":server,"insecure":insecure}
+        "tls":{"enabled":true,"server_name":server_name,"insecure":insecure}
     });
     commit_inbound(
         "trojan-tls",
@@ -1343,6 +1353,10 @@ fn add_hysteria2_tls(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("hy2-{}", short_hex(4)));
+    let server_name = matches
+        .get_one::<String>("server-name")
+        .cloned()
+        .unwrap_or_else(|| server.clone());
     let password = matches
         .get_one::<String>("password")
         .cloned()
@@ -1351,7 +1365,7 @@ fn add_hysteria2_tls(
         .get_one::<String>("obfs-password")
         .cloned()
         .unwrap_or_else(|| random_b64url(18));
-    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server)?;
+    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server_name)?;
     let listen = matches
         .get_one::<String>("listen")
         .cloned()
@@ -1361,14 +1375,14 @@ fn add_hysteria2_tls(
         "users":[{"name":"default","password":password}],
         "obfs":{"type":"salamander","password":obfs},
         "ignore_client_bandwidth":false,
-        "tls":{"enabled":true,"server_name":server,"certificate_path":cert_path,"key_path":key_path}
+        "tls":{"enabled":true,"server_name":server_name,"certificate_path":cert_path,"key_path":key_path}
     });
     let link = format!(
         "hysteria2://{}@{}:{}?sni={}&obfs=salamander&obfs-password={}{}#{}",
         password,
         format_uri_host(&server),
         port,
-        server,
+        server_name,
         obfs,
         if insecure { "&insecure=1" } else { "" },
         tag
@@ -1376,7 +1390,7 @@ fn add_hysteria2_tls(
     let client_json = json!({
         "type":"hysteria2","tag":tag,"server":server,"server_port":port,"password":password,
         "obfs":{"type":"salamander","password":obfs},
-        "tls":{"enabled":true,"server_name":server,"insecure":insecure}
+        "tls":{"enabled":true,"server_name":server_name,"insecure":insecure}
     });
     commit_inbound(
         "hysteria2-tls",
@@ -1422,6 +1436,10 @@ fn add_tuic_tls(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("tuic-{}", short_hex(4)));
+    let server_name = matches
+        .get_one::<String>("server-name")
+        .cloned()
+        .unwrap_or_else(|| server.clone());
     let uuid = matches
         .get_one::<String>("uuid")
         .cloned()
@@ -1430,7 +1448,7 @@ fn add_tuic_tls(
         .get_one::<String>("password")
         .cloned()
         .unwrap_or_else(|| random_b64url(20));
-    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server)?;
+    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server_name)?;
     let listen = matches
         .get_one::<String>("listen")
         .cloned()
@@ -1438,22 +1456,23 @@ fn add_tuic_tls(
     let inbound = json!({
         "type":"tuic","tag":tag,"listen":listen,"listen_port":port,
         "users":[{"name":"default","uuid":uuid,"password":password}],
-        "congestion_control":"bbr","zero_rtt_handshake":false,"heartbeat":"10s",
-        "tls":{"enabled":true,"server_name":server,"certificate_path":cert_path,"key_path":key_path}
+        "congestion_control":"bbr","auth_timeout":"3s","zero_rtt_handshake":false,"heartbeat":"10s",
+        "tls":{"enabled":true,"server_name":server_name,"alpn":["h3"],"certificate_path":cert_path,"key_path":key_path}
     });
     let link = format!(
-        "tuic://{}:{}@{}:{}?congestion_control=bbr&sni={}{}#{}",
+        "tuic://{}:{}@{}:{}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={}{}#{}",
         uuid,
         password,
         format_uri_host(&server),
         port,
-        server,
+        server_name,
         if insecure { "&allow_insecure=1" } else { "" },
         tag
     );
     let client_json = json!({
         "type":"tuic","tag":tag,"server":server,"server_port":port,"uuid":uuid,"password":password,
-        "congestion_control":"bbr","tls":{"enabled":true,"server_name":server,"insecure":insecure}
+        "congestion_control":"bbr","udp_relay_mode":"native","zero_rtt_handshake":false,"heartbeat":"10s",
+        "tls":{"enabled":true,"server_name":server_name,"alpn":["h3"],"insecure":insecure}
     });
     commit_inbound(
         "tuic-tls",
@@ -1670,9 +1689,24 @@ fn apply_config_and_meta(
         }
         return Err(err.with_warnings(vec!["配置校验失败，已尝试回滚最近一次修改。".into()]));
     }
+    if let Err(err) = restart_singbox_service() {
+        if let Some(path) = &cfg_backup {
+            let _ = restore_backup(path, Path::new(SINGBOX_CONFIG_PATH));
+        }
+        if let Some(path) = &meta_backup {
+            let _ = restore_backup(path, Path::new(SINGBOX_META_PATH));
+        }
+        let _ = restart_singbox_service();
+        return Err(err.with_warnings(vec![
+            "sing-box 服务重启失败，已尝试回滚最近一次修改。".into()
+        ]));
+    }
     let mut report = OperationReport::default();
     report.changed_files.push(SINGBOX_CONFIG_PATH.into());
     report.changed_files.push(SINGBOX_META_PATH.into());
+    report
+        .warnings
+        .push("已自动重启 sing-box 服务，使新增节点立即生效。".into());
     append_backup(&mut report, &cfg_backup);
     append_backup(&mut report, &meta_backup);
     Ok(report)
@@ -1695,6 +1729,24 @@ fn validate_current_config() -> Result<(), CliError> {
     } else {
         read_singbox_config().ok_or_else(|| CliError::new("当前配置文件不存在或不是合法 JSON"))?;
         Ok(())
+    }
+}
+
+fn restart_singbox_service() -> Result<(), CliError> {
+    if !Path::new(SINGBOX_SERVICE_FILE).exists() {
+        return Ok(());
+    }
+    let output = SysCmd::new("systemctl")
+        .args(["restart", "sing-box"])
+        .output()
+        .map_err(|e| CliError::new(format!("重启 sing-box 服务失败: {}", e)))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "重启 sing-box 服务失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
     }
 }
 
@@ -2024,18 +2076,45 @@ fn short_hex(bytes: usize) -> String {
 }
 
 fn new_uuid() -> String {
-    let output = SysCmd::new("uuidgen").output();
-    output
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            format!(
-                "00000000-0000-4000-8000-{:012}",
-                current_timestamp() % 1_000_000_000_000
-            )
-        })
+    random_uuid_v4().unwrap_or_else(|| {
+        let output = SysCmd::new("uuidgen").output();
+        output
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                format!(
+                    "00000000-0000-4000-8000-{:012}",
+                    current_timestamp() % 1_000_000_000_000
+                )
+            })
+    })
+}
+
+fn random_uuid_v4() -> Option<String> {
+    let mut bytes = [0u8; 16];
+    let mut file = File::open("/dev/urandom").ok()?;
+    file.read_exact(&mut bytes).ok()?;
+    Some(format_uuid_v4(bytes))
+}
+
+fn format_uuid_v4(mut bytes: [u8; 16]) -> String {
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        u16::from_be_bytes([bytes[4], bytes[5]]),
+        u16::from_be_bytes([bytes[6], bytes[7]]),
+        u16::from_be_bytes([bytes[8], bytes[9]]),
+        ((bytes[10] as u64) << 40)
+            | ((bytes[11] as u64) << 32)
+            | ((bytes[12] as u64) << 24)
+            | ((bytes[13] as u64) << 16)
+            | ((bytes[14] as u64) << 8)
+            | (bytes[15] as u64)
+    )
 }
 
 fn random_b64url(length: usize) -> String {
@@ -2174,5 +2253,23 @@ mod tests {
             .find(|item| item.name == asset_name)
             .unwrap();
         assert_eq!(asset.name, "sing-box-1.13.12-linux-amd64.tar.gz");
+    }
+
+    #[test]
+    fn format_uuid_v4_sets_version_and_variant_bits() {
+        let uuid = format_uuid_v4([0u8; 16]);
+        assert_eq!(uuid, "00000000-0000-4000-8000-000000000000");
+    }
+
+    #[test]
+    fn random_uuid_v4_has_expected_shape() {
+        let uuid = random_uuid_v4().unwrap();
+        assert_eq!(uuid.len(), 36);
+        assert_eq!(uuid.chars().nth(8), Some('-'));
+        assert_eq!(uuid.chars().nth(13), Some('-'));
+        assert_eq!(uuid.chars().nth(18), Some('-'));
+        assert_eq!(uuid.chars().nth(23), Some('-'));
+        assert_eq!(uuid.chars().nth(14), Some('4'));
+        assert!(matches!(uuid.chars().nth(19), Some('8' | '9' | 'a' | 'b')));
     }
 }
