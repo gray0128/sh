@@ -32,6 +32,21 @@ fn singbox_remove_node_without_id_returns_json_error_in_non_interactive_mode() {
 }
 
 #[test]
+fn mieru_remove_node_without_id_returns_json_error_in_non_interactive_mode() {
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
+        .args(["--json", "--no-input", "mieru", "remove-node"])
+        .output()
+        .expect("运行命令失败");
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: Value = serde_json::from_str(&stdout).expect("stdout 不是 JSON");
+    assert_eq!(payload["ok"], false);
+    let err = payload["error"].as_str().unwrap_or_default();
+    assert!(err.contains("--id"));
+}
+
+#[test]
 fn json_dry_run_success_contract_is_stable() {
     let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
         .args(["--json", "singbox", "install", "--dry-run"])

@@ -135,6 +135,22 @@ pub fn cli() -> Command {
         )
         .subcommand(Command::new("list-nodes").about("查看节点，安全视图"))
         .subcommand(
+            Command::new("remove-node")
+                .about("删除 mieru/mita 节点")
+                .arg(
+                    Arg::new("id")
+                        .long("id")
+                        .value_name("TAG")
+                        .help("要删除的节点标签；交互模式下不传时会先列出节点供选择"),
+                )
+                .arg(
+                    Arg::new("confirm")
+                        .long("confirm")
+                        .action(ArgAction::SetTrue)
+                        .help("跳过交互确认"),
+                ),
+        )
+        .subcommand(
             Command::new("show-links")
                 .about("兼容入口：查看 simple 链接和客户端 JSON")
                 .arg(
@@ -204,6 +220,7 @@ pub fn handle_mieru(
         Some(("install", sub)) => install_mita(sub, format, no_input),
         Some(("add-node", sub)) => add_node(sub, format, no_input),
         Some(("list-nodes", _)) => list_nodes(format),
+        Some(("remove-node", sub)) => remove_node(sub, format, no_input),
         Some(("show-links", sub)) => show_links(sub, format, no_input),
         Some(("show-simple-links", sub)) => show_simple_links(sub, format),
         Some(("show-standard-links", sub)) => show_standard_links(sub, format),
@@ -430,6 +447,54 @@ fn list_nodes(format: OutputFormat) -> Result<(), CliError> {
     Ok(())
 }
 
+fn remove_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Result<(), CliError> {
+    let interactive = is_interactive(no_input);
+    let confirm = matches.get_flag("confirm");
+    let id = match matches.get_one::<String>("id").cloned() {
+        Some(id) => id,
+        None if interactive => {
+            let nodes = read_nodes()?;
+            let choices = removable_node_choices(&nodes);
+            if choices.is_empty() {
+                return Err(CliError::new("当前没有可删除的 mieru 节点"));
+            }
+            let labels = choices
+                .iter()
+                .map(|(_, label)| label.clone())
+                .collect::<Vec<_>>();
+            let selection = Select::new()
+                .with_prompt("请选择要删除的 mieru 节点")
+                .items(&labels)
+                .default(0)
+                .interact()
+                .map_err(|e| CliError::new(format!("读取节点选择失败: {}", e)))?;
+            choices[selection].0.clone()
+        }
+        None => return Err(CliError::new("非交互模式下删除节点必须显式传入 --id")),
+    };
+    let mut nodes = read_nodes()?;
+    require_confirmation(
+        &format!("确认删除 mieru 节点 {}？", id),
+        interactive,
+        false,
+        confirm,
+    )?;
+    ensure_mita_exists()?;
+    let original_len = nodes.len();
+    nodes.retain(|item| item.tag != id);
+    if nodes.len() == original_len {
+        return Err(CliError::new(format!("未找到节点 {}", id)));
+    }
+    let report = write_nodes_and_apply(&nodes)?;
+    emit_success(
+        format,
+        json!({"removed": id}),
+        &report,
+        Some(vec![crumb("查看节点", "vps-cli mieru list-nodes")]),
+    );
+    Ok(())
+}
+
 fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Result<(), CliError> {
     let show_secrets = matches.get_flag("show-secrets");
     let id = matches.get_one::<String>("id").cloned();
@@ -483,6 +548,21 @@ fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Res
         .collect::<Vec<_>>();
     emit_success(format, json!(data), &report, None);
     Ok(())
+}
+
+fn removable_node_choices(nodes: &[MieruNode]) -> Vec<(String, String)> {
+    nodes
+        .iter()
+        .map(|item| {
+            (
+                item.tag.clone(),
+                format!(
+                    "{} | 协议: {} | 端口: {} | 主机: {}",
+                    item.tag, item.protocol, item.port, item.host
+                ),
+            )
+        })
+        .collect()
 }
 
 fn show_simple_links(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError> {
@@ -1152,5 +1232,27 @@ mod tests {
     fn simple_link_percent_encodes_credentials() {
         let link = build_simple_link("user:name", "p@ss word", "example.com", 8443, "TCP");
         assert!(link.starts_with("mierus://user%3Aname:p%40ss%20word@example.com"));
+    }
+
+    #[test]
+    fn removable_node_choices_include_tag_protocol_port_and_host() {
+        let nodes = vec![MieruNode {
+            node_type: "mieru".into(),
+            tag: "mieru-tcp-8443".into(),
+            host: "example.com".into(),
+            port: 8443,
+            protocol: "TCP".into(),
+            username: "alice".into(),
+            password: "secret".into(),
+            link: "mierus://...".into(),
+            client: json!({}),
+            created_at: "2026-05-16T00:00:00Z".into(),
+        }];
+        let choices = removable_node_choices(&nodes);
+        assert_eq!(choices.len(), 1);
+        assert_eq!(choices[0].0, "mieru-tcp-8443");
+        assert!(choices[0].1.contains("TCP"));
+        assert!(choices[0].1.contains("8443"));
+        assert!(choices[0].1.contains("example.com"));
     }
 }

@@ -12,6 +12,7 @@ fn mieru_help_includes_expected_subcommands() {
     assert!(stdout.contains("install"));
     assert!(stdout.contains("add-node"));
     assert!(stdout.contains("list-nodes"));
+    assert!(stdout.contains("remove-node"));
     assert!(stdout.contains("show-links"));
     assert!(stdout.contains("show-simple-links"));
     assert!(stdout.contains("show-standard-links"));
