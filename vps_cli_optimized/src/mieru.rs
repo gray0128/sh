@@ -222,8 +222,8 @@ pub fn handle_mieru(
         Some(("list-nodes", _)) => list_nodes(format),
         Some(("remove-node", sub)) => remove_node(sub, format, no_input),
         Some(("show-links", sub)) => show_links(sub, format, no_input),
-        Some(("show-simple-links", sub)) => show_simple_links(sub, format),
-        Some(("show-standard-links", sub)) => show_standard_links(sub, format),
+        Some(("show-simple-links", sub)) => show_simple_links(sub, format, no_input),
+        Some(("show-standard-links", sub)) => show_standard_links(sub, format, no_input),
         Some(("status", _)) => mita_status(format),
         Some(("start", _)) => mita_action("start", format),
         Some(("stop", _)) => mita_action("stop", format),
@@ -497,8 +497,13 @@ fn remove_node(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Re
 
 fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Result<(), CliError> {
     let show_secrets = matches.get_flag("show-secrets");
-    let id = matches.get_one::<String>("id").cloned();
     let nodes = read_nodes()?;
+    let id = resolve_optional_node_id(
+        matches.get_one::<String>("id").cloned(),
+        &nodes,
+        is_interactive(no_input),
+        "请选择要查看的 mieru 节点",
+    )?;
     if !show_secrets {
         let data = nodes
             .iter()
@@ -565,10 +570,48 @@ fn removable_node_choices(nodes: &[MieruNode]) -> Vec<(String, String)> {
         .collect()
 }
 
-fn show_simple_links(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError> {
+fn resolve_optional_node_id(
+    id: Option<String>,
+    nodes: &[MieruNode],
+    interactive: bool,
+    prompt: &str,
+) -> Result<Option<String>, CliError> {
+    match id {
+        Some(id) => Ok(Some(id)),
+        None if interactive => {
+            let choices = removable_node_choices(nodes);
+            if choices.is_empty() {
+                return Err(CliError::new("当前没有可选择的 mieru 节点"));
+            }
+            let labels = choices
+                .iter()
+                .map(|(_, label)| label.clone())
+                .collect::<Vec<_>>();
+            let selection = Select::new()
+                .with_prompt(prompt)
+                .items(&labels)
+                .default(0)
+                .interact()
+                .map_err(|e| CliError::new(format!("读取节点选择失败: {}", e)))?;
+            Ok(Some(choices[selection].0.clone()))
+        }
+        None => Ok(None),
+    }
+}
+
+fn show_simple_links(
+    matches: &ArgMatches,
+    format: OutputFormat,
+    no_input: bool,
+) -> Result<(), CliError> {
     let show_secrets = matches.get_flag("show-secrets");
-    let id = matches.get_one::<String>("id").cloned();
     let nodes = read_nodes()?;
+    let id = resolve_optional_node_id(
+        matches.get_one::<String>("id").cloned(),
+        &nodes,
+        is_interactive(no_input),
+        "请选择要查看 simple 链接的 mieru 节点",
+    )?;
     if !show_secrets {
         let data = nodes
             .iter()
@@ -609,10 +652,19 @@ fn show_simple_links(matches: &ArgMatches, format: OutputFormat) -> Result<(), C
     Ok(())
 }
 
-fn show_standard_links(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliError> {
+fn show_standard_links(
+    matches: &ArgMatches,
+    format: OutputFormat,
+    no_input: bool,
+) -> Result<(), CliError> {
     let show_secrets = matches.get_flag("show-secrets");
-    let id = matches.get_one::<String>("id").cloned();
     let nodes = read_nodes()?;
+    let id = resolve_optional_node_id(
+        matches.get_one::<String>("id").cloned(),
+        &nodes,
+        is_interactive(no_input),
+        "请选择要查看标准链接的 mieru 节点",
+    )?;
     if !show_secrets {
         let data = nodes
             .iter()
@@ -1254,5 +1306,20 @@ mod tests {
         assert!(choices[0].1.contains("TCP"));
         assert!(choices[0].1.contains("8443"));
         assert!(choices[0].1.contains("example.com"));
+    }
+
+    #[test]
+    fn resolve_optional_node_id_keeps_explicit_id() {
+        let nodes = vec![];
+        let selected =
+            resolve_optional_node_id(Some("demo".into()), &nodes, false, "ignored").unwrap();
+        assert_eq!(selected, Some("demo".into()));
+    }
+
+    #[test]
+    fn resolve_optional_node_id_returns_none_in_non_interactive_mode() {
+        let nodes = vec![];
+        let selected = resolve_optional_node_id(None, &nodes, false, "ignored").unwrap();
+        assert!(selected.is_none());
     }
 }
