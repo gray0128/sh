@@ -574,7 +574,7 @@ fn resolve_optional_node_id(
         None if interactive => {
             let choices = removable_node_choices(nodes);
             if choices.is_empty() {
-                return Err(CliError::new("当前没有可选择的 mieru 节点"));
+                return Ok(None);
             }
             let labels = choices
                 .iter()
@@ -597,9 +597,12 @@ fn resolve_required_node_id(
     nodes: &[MieruNode],
     interactive: bool,
     prompt: &str,
-    _empty_message: &str,
+    empty_message: &str,
     missing_message: &str,
 ) -> Result<String, CliError> {
+    if id.is_none() && interactive && nodes.is_empty() {
+        return Err(CliError::new(empty_message));
+    }
     match resolve_optional_node_id(id, nodes, interactive, prompt)? {
         Some(id) => Ok(id),
         None => Err(CliError::new(missing_message)),
@@ -1331,6 +1334,13 @@ mod tests {
     }
 
     #[test]
+    fn resolve_optional_node_id_returns_none_when_empty_in_interactive_mode() {
+        let nodes = vec![];
+        let selected = resolve_optional_node_id(None, &nodes, true, "ignored").unwrap();
+        assert!(selected.is_none());
+    }
+
+    #[test]
     fn resolve_required_node_id_requires_id_in_non_interactive_mode() {
         let nodes = vec![MieruNode {
             node_type: "mieru".into(),
@@ -1347,5 +1357,13 @@ mod tests {
         let err = resolve_required_node_id(None, &nodes, false, "ignored", "empty", "missing")
             .unwrap_err();
         assert!(err.message.contains("missing"));
+    }
+
+    #[test]
+    fn resolve_required_node_id_uses_empty_message_when_no_nodes() {
+        let nodes = vec![];
+        let err = resolve_required_node_id(None, &nodes, true, "ignored", "empty", "missing")
+            .unwrap_err();
+        assert!(err.message.contains("empty"));
     }
 }

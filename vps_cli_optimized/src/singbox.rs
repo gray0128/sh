@@ -702,14 +702,14 @@ fn resolve_optional_config_node_id(
     config: &JsonValue,
     interactive: bool,
     prompt: &str,
-    empty_message: &str,
+    _empty_message: &str,
 ) -> Result<Option<String>, CliError> {
     match id {
         Some(id) => Ok(Some(id)),
         None if interactive => {
             let choices = removable_node_choices(config);
             if choices.is_empty() {
-                return Err(CliError::new(empty_message));
+                return Ok(None);
             }
             let labels = choices
                 .iter()
@@ -735,6 +735,9 @@ fn resolve_required_config_node_id(
     empty_message: &str,
     missing_message: &str,
 ) -> Result<String, CliError> {
+    if id.is_none() && interactive && removable_node_choices(config).is_empty() {
+        return Err(CliError::new(empty_message));
+    }
     match resolve_optional_config_node_id(id, config, interactive, prompt, empty_message)? {
         Some(id) => Ok(id),
         None => Err(CliError::new(missing_message)),
@@ -767,7 +770,7 @@ fn resolve_optional_meta_id(
         None if interactive => {
             let choices = removable_meta_choices(metas);
             if choices.is_empty() {
-                return Err(CliError::new("当前没有可选择的节点"));
+                return Ok(None);
             }
             let labels = choices
                 .iter()
@@ -1939,7 +1942,7 @@ fn show_config(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Re
             "当前没有可选择的节点",
         )?;
         if let Some(tag) = selected {
-            let inbound = find_inbound_by_tag(&config, &tag)
+            let inbound = find_inbound_by_id(&config, &tag)
                 .ok_or_else(|| CliError::new(format!("未找到节点 {}", tag)))?;
             let summary = inbound_summary(inbound);
             emit_success(
@@ -2080,14 +2083,20 @@ fn list_node_summaries() -> Vec<JsonValue> {
         .unwrap_or_default()
 }
 
-fn find_inbound_by_tag<'a>(config: &'a JsonValue, tag: &str) -> Option<&'a JsonValue> {
+fn find_inbound_by_id<'a>(config: &'a JsonValue, id: &str) -> Option<&'a JsonValue> {
     config
         .get("inbounds")
         .and_then(|v| v.as_array())
         .and_then(|items| {
+            if id.chars().all(|c| c.is_ascii_digit()) {
+                let idx = id.parse::<usize>().ok()?;
+                if idx > 0 && idx <= items.len() {
+                    return items.get(idx - 1);
+                }
+            }
             items
                 .iter()
-                .find(|item| item.get("tag").and_then(|v| v.as_str()) == Some(tag))
+                .find(|item| item.get("tag").and_then(|v| v.as_str()) == Some(id))
         })
 }
 
@@ -2597,6 +2606,20 @@ mod tests {
     }
 
     #[test]
+    fn resolve_optional_config_node_id_returns_none_when_empty_in_interactive_mode() {
+        let config = json!({"inbounds": []});
+        let selected =
+            resolve_optional_config_node_id(None, &config, true, "ignored", "empty").unwrap();
+        assert!(selected.is_none());
+    }
+
+    #[test]
+    fn resolve_optional_meta_id_returns_none_when_empty_in_interactive_mode() {
+        let selected = resolve_optional_meta_id(None, &[], true, "ignored").unwrap();
+        assert!(selected.is_none());
+    }
+
+    #[test]
     fn resolve_required_config_node_id_requires_id_in_non_interactive_mode() {
         let config =
             json!({"inbounds": [{"tag": "vless-01", "type": "vless", "listen_port": 443}]});
@@ -2607,15 +2630,28 @@ mod tests {
     }
 
     #[test]
-    fn find_inbound_by_tag_returns_matching_inbound() {
+    fn find_inbound_by_id_returns_matching_inbound_by_tag() {
         let config = json!({
             "inbounds": [
                 {"tag": "vless-01", "type": "vless", "listen_port": 443},
                 {"tag": "hy2-01", "type": "hysteria2", "listen_port": 8443}
             ]
         });
-        let inbound = find_inbound_by_tag(&config, "hy2-01").unwrap();
+        let inbound = find_inbound_by_id(&config, "hy2-01").unwrap();
         assert_eq!(inbound["type"], "hysteria2");
         assert_eq!(inbound["listen_port"], 8443);
+    }
+
+    #[test]
+    fn find_inbound_by_id_supports_numeric_fallback() {
+        let config = json!({
+            "inbounds": [
+                {"type": "vless", "listen_port": 443},
+                {"tag": "hy2-01", "type": "hysteria2", "listen_port": 8443}
+            ]
+        });
+        let inbound = find_inbound_by_id(&config, "1").unwrap();
+        assert_eq!(inbound["type"], "vless");
+        assert_eq!(inbound["listen_port"], 443);
     }
 }
