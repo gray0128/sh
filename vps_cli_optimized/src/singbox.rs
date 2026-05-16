@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::process::Command as SysCmd;
 use tar::Archive;
@@ -1168,10 +1169,13 @@ fn add_vless_reality(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("vless-reality-{}", short_hex(4)));
-    let server_name = matches
-        .get_one::<String>("server-name")
-        .cloned()
-        .unwrap_or_else(|| server.clone());
+    let server_name = resolve_server_name(
+        matches.get_one::<String>("server-name").cloned(),
+        &server,
+        interactive,
+        "连接地址是 IP，请输入 Reality 握手域名 / SNI",
+        "当 --server 为 IP 时，VLESS Reality 必须显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
+    )?;
     let uuid = matches
         .get_one::<String>("uuid")
         .cloned()
@@ -1215,7 +1219,13 @@ fn add_vless_reality(
     });
     let link = format!(
         "vless://{}@{}:{}?encryption=none&flow=xtls-rprx-vision&security=reality&sni={}&fp=chrome&pbk={}&sid={}&type=tcp#{}",
-        uuid, format_uri_host(&server), port, server_name, public_key, short_id, tag
+        uri_component(&uuid),
+        format_uri_host(&server),
+        port,
+        uri_component(&server_name),
+        uri_component(&public_key),
+        uri_component(&short_id),
+        uri_fragment(&tag)
     );
     let client_json = json!({
         "type": "vless",
@@ -1275,10 +1285,13 @@ fn add_trojan_tls(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("trojan-{}", short_hex(4)));
-    let server_name = matches
-        .get_one::<String>("server-name")
-        .cloned()
-        .unwrap_or_else(|| server.clone());
+    let server_name = resolve_server_name(
+        matches.get_one::<String>("server-name").cloned(),
+        &server,
+        interactive,
+        "连接地址是 IP，请输入 TLS SNI / 证书域名",
+        "当 --server 为 IP 时，请显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
+    )?;
     let password = matches
         .get_one::<String>("password")
         .cloned()
@@ -1298,12 +1311,12 @@ fn add_trojan_tls(
     });
     let link = format!(
         "trojan://{}@{}:{}?security=tls&sni={}{}#{}",
-        password,
+        uri_component(&password),
         format_uri_host(&server),
         port,
-        server_name,
+        uri_component(&server_name),
         if insecure { "&allowInsecure=1" } else { "" },
-        tag
+        uri_fragment(&tag)
     );
     let client_json = json!({
         "type":"trojan","tag":tag,"server":server,"server_port":port,"password":password,
@@ -1353,10 +1366,13 @@ fn add_hysteria2_tls(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("hy2-{}", short_hex(4)));
-    let server_name = matches
-        .get_one::<String>("server-name")
-        .cloned()
-        .unwrap_or_else(|| server.clone());
+    let server_name = resolve_server_name(
+        matches.get_one::<String>("server-name").cloned(),
+        &server,
+        interactive,
+        "连接地址是 IP，请输入 TLS SNI / 证书域名",
+        "当 --server 为 IP 时，请显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
+    )?;
     let password = matches
         .get_one::<String>("password")
         .cloned()
@@ -1379,13 +1395,13 @@ fn add_hysteria2_tls(
     });
     let link = format!(
         "hysteria2://{}@{}:{}?sni={}&obfs=salamander&obfs-password={}{}#{}",
-        password,
+        uri_component(&password),
         format_uri_host(&server),
         port,
-        server_name,
-        obfs,
+        uri_component(&server_name),
+        uri_component(&obfs),
         if insecure { "&insecure=1" } else { "" },
-        tag
+        uri_fragment(&tag)
     );
     let client_json = json!({
         "type":"hysteria2","tag":tag,"server":server,"server_port":port,"password":password,
@@ -1436,10 +1452,13 @@ fn add_tuic_tls(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("tuic-{}", short_hex(4)));
-    let server_name = matches
-        .get_one::<String>("server-name")
-        .cloned()
-        .unwrap_or_else(|| server.clone());
+    let server_name = resolve_server_name(
+        matches.get_one::<String>("server-name").cloned(),
+        &server,
+        interactive,
+        "连接地址是 IP，请输入 TLS SNI / 证书域名",
+        "当 --server 为 IP 时，请显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
+    )?;
     let uuid = matches
         .get_one::<String>("uuid")
         .cloned()
@@ -1461,13 +1480,13 @@ fn add_tuic_tls(
     });
     let link = format!(
         "tuic://{}:{}@{}:{}?congestion_control=bbr&udp_relay_mode=native&alpn=h3&sni={}{}#{}",
-        uuid,
-        password,
+        uri_component(&uuid),
+        uri_component(&password),
         format_uri_host(&server),
         port,
-        server_name,
+        uri_component(&server_name),
         if insecure { "&allow_insecure=1" } else { "" },
-        tag
+        uri_fragment(&tag)
     );
     let client_json = json!({
         "type":"tuic","tag":tag,"server":server,"server_port":port,"uuid":uuid,"password":password,
@@ -1548,7 +1567,7 @@ fn add_shadowsocks(
         ss_userinfo(&method, &password),
         format_uri_host(&server),
         port,
-        tag
+        uri_fragment(&tag)
     );
     let client_json = json!({
         "type":"shadowsocks","tag":tag,"server":server,"server_port":port,"method":method,"password":password
@@ -2042,6 +2061,28 @@ fn required_or_prompt(
     }
 }
 
+fn resolve_server_name(
+    explicit: Option<String>,
+    server: &str,
+    interactive: bool,
+    prompt: &str,
+    non_interactive_error: &str,
+) -> Result<String, CliError> {
+    if let Some(value) = explicit {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+    if !is_ip_host(server) {
+        return Ok(server.to_string());
+    }
+    if interactive {
+        return required_or_prompt(None, prompt, true);
+    }
+    Err(CliError::new(non_interactive_error))
+}
+
 fn parse_port(value: String) -> Result<u16, CliError> {
     let port: u16 = value.parse().map_err(|_| CliError::new("端口必须为数字"))?;
     if !(1..=65535).contains(&port) {
@@ -2140,6 +2181,31 @@ fn format_uri_host(host: &str) -> String {
     } else {
         host.to_string()
     }
+}
+
+fn strip_ip_brackets(host: &str) -> &str {
+    host.trim().trim_start_matches('[').trim_end_matches(']')
+}
+
+fn is_ip_host(host: &str) -> bool {
+    strip_ip_brackets(host).parse::<IpAddr>().is_ok()
+}
+
+fn uri_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char)
+            }
+            _ => encoded.push_str(&format!("%{:02X}", *byte)),
+        }
+    }
+    encoded
+}
+
+fn uri_fragment(value: &str) -> String {
+    uri_component(value)
 }
 
 fn sanitize_name(value: &str) -> String {
@@ -2271,5 +2337,30 @@ mod tests {
         assert_eq!(uuid.chars().nth(23), Some('-'));
         assert_eq!(uuid.chars().nth(14), Some('4'));
         assert!(matches!(uuid.chars().nth(19), Some('8' | '9' | 'a' | 'b')));
+    }
+
+    #[test]
+    fn resolve_server_name_reuses_domain_server() {
+        let server_name =
+            resolve_server_name(None, "edge.example.com", false, "ignored", "ignored").unwrap();
+        assert_eq!(server_name, "edge.example.com");
+    }
+
+    #[test]
+    fn resolve_server_name_requires_explicit_value_for_ip_in_non_interactive_mode() {
+        let err = resolve_server_name(
+            None,
+            "1.2.3.4",
+            false,
+            "请输入 TLS SNI / 证书域名",
+            "当 --server 为 IP 时，请显式提供 --server-name",
+        )
+        .unwrap_err();
+        assert!(err.message.contains("显式提供 --server-name"));
+    }
+
+    #[test]
+    fn uri_component_percent_encodes_reserved_characters() {
+        assert_eq!(uri_component("a+b c/=?"), "a%2Bb%20c%2F%3D%3F");
     }
 }

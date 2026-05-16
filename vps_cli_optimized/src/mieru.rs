@@ -893,6 +893,19 @@ fn is_ip_host(host: &str) -> bool {
     strip_ip_brackets(host).parse::<IpAddr>().is_ok()
 }
 
+fn uri_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                encoded.push(*byte as char)
+            }
+            _ => encoded.push_str(&format!("%{:02X}", *byte)),
+        }
+    }
+    encoded
+}
+
 fn build_simple_link(
     username: &str,
     password: &str,
@@ -902,11 +915,11 @@ fn build_simple_link(
 ) -> String {
     format!(
         "mierus://{}:{}@{}?profile=default&mtu=1400&multiplexing=MULTIPLEXING_HIGH&handshake-mode=HANDSHAKE_STANDARD&port={}&protocol={}",
-        username,
-        password,
+        uri_component(username),
+        uri_component(password),
         format_uri_host(host),
         port,
-        protocol
+        uri_component(protocol)
     )
 }
 
@@ -1133,5 +1146,11 @@ mod tests {
         assert!(link.starts_with("mierus://"));
         assert!(link.contains("port=8443"));
         assert!(link.contains("protocol=TCP"));
+    }
+
+    #[test]
+    fn simple_link_percent_encodes_credentials() {
+        let link = build_simple_link("user:name", "p@ss word", "example.com", 8443, "TCP");
+        assert!(link.starts_with("mierus://user%3Aname:p%40ss%20word@example.com"));
     }
 }
