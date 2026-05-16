@@ -15,6 +15,10 @@ const SINGBOX_SERVICE_FILE: &str = "/etc/systemd/system/sing-box.service";
 const SINGBOX_BINARY_PATH: &str = "/usr/local/bin/sing-box";
 const SINGBOX_META_FILE: &str = "/etc/sing-box/vps-cli-nodes.json";
 const MIERU_MANAGED_DIR: &str = "/etc/mieru-managed";
+const TRUSTTUNNEL_INSTALLER_URL: &str =
+    "https://raw.githubusercontent.com/TrustTunnel/TrustTunnel/refs/heads/master/scripts/install.sh";
+const TRUSTTUNNEL_DEFAULT_INSTALL_DIR: &str = "/opt/trusttunnel";
+const TRUSTTUNNEL_SERVICE_FILE: &str = "/etc/systemd/system/trusttunnel.service";
 
 #[derive(Debug, Clone)]
 struct BackupEntry {
@@ -88,6 +92,38 @@ pub fn cli() -> Command {
                         .help("跳过交互确认"),
                 ),
         )
+        .subcommand(
+            Command::new("trusttunnel-uninstall")
+                .about("卸载 TrustTunnel 安装目录内容，尽量保留 systemd 文件")
+                .arg(
+                    Arg::new("output-dir")
+                        .long("output-dir")
+                        .value_name("DIR")
+                        .help("TrustTunnel 安装目录，默认 /opt/trusttunnel"),
+                )
+                .arg(
+                    Arg::new("confirm")
+                        .long("confirm")
+                        .action(ArgAction::SetTrue)
+                        .help("跳过交互确认"),
+                ),
+        )
+        .subcommand(
+            Command::new("trusttunnel-purge")
+                .about("彻底清理 TrustTunnel 安装目录与 systemd 文件")
+                .arg(
+                    Arg::new("output-dir")
+                        .long("output-dir")
+                        .value_name("DIR")
+                        .help("TrustTunnel 安装目录，默认 /opt/trusttunnel"),
+                )
+                .arg(
+                    Arg::new("confirm")
+                        .long("confirm")
+                        .action(ArgAction::SetTrue)
+                        .help("跳过交互确认"),
+                ),
+        )
 }
 
 pub fn handle_reclaim(
@@ -105,6 +141,8 @@ pub fn handle_reclaim(
         Some(("audit-caddy", _)) => audit_web_server("caddy", format),
         Some(("cleanup-caddy", sub)) => cleanup_web_server("caddy", sub, format, no_input),
         Some(("mieru-uninstall", sub)) => mieru_uninstall(sub, format, no_input),
+        Some(("trusttunnel-uninstall", sub)) => trusttunnel_uninstall(sub, format, no_input),
+        Some(("trusttunnel-purge", sub)) => trusttunnel_purge(sub, format, no_input),
         _ => Err(CliError::new("未知子命令")),
     }
 }
@@ -514,6 +552,126 @@ fn mieru_uninstall(
     Ok(())
 }
 
+fn trusttunnel_uninstall(
+    matches: &ArgMatches,
+    format: OutputFormat,
+    no_input: bool,
+) -> Result<(), CliError> {
+    let output_dir = normalized_trusttunnel_dir(matches.get_one::<String>("output-dir"));
+    let confirm = matches.get_flag("confirm");
+    let interactive = is_interactive(no_input);
+    trusttunnel_uninstall_shared(&output_dir, format, interactive, confirm)
+}
+
+fn trusttunnel_purge(
+    matches: &ArgMatches,
+    format: OutputFormat,
+    no_input: bool,
+) -> Result<(), CliError> {
+    let output_dir = normalized_trusttunnel_dir(matches.get_one::<String>("output-dir"));
+    let confirm = matches.get_flag("confirm");
+    let interactive = is_interactive(no_input);
+    trusttunnel_purge_shared(&output_dir, format, interactive, confirm)
+}
+
+pub fn trusttunnel_uninstall_shared(
+    output_dir: &str,
+    format: OutputFormat,
+    interactive: bool,
+    confirm: bool,
+) -> Result<(), CliError> {
+    require_confirmation(
+        "这将停止 TrustTunnel 服务并卸载安装目录内容，确认继续？",
+        interactive,
+        false,
+        confirm,
+    )?;
+    stop_disable_service("trusttunnel");
+    run_trusttunnel_installer_uninstall(output_dir)?;
+    let mut report = OperationReport::default();
+    report.changed_files.push(output_dir.into());
+    if Path::new(TRUSTTUNNEL_SERVICE_FILE).exists() {
+        report.warnings.push(format!(
+            "卸载后仍检测到 systemd 文件 {}，如需彻底删除请执行 `vps-cli trusttunnel purge --confirm` 或 `vps-cli reclaim trusttunnel-purge --confirm`。",
+            TRUSTTUNNEL_SERVICE_FILE
+        ));
+    }
+    emit_success(
+        format,
+        json!({
+            "uninstalled": true,
+            "target": "trusttunnel",
+            "output_dir": output_dir,
+            "service_file_exists": Path::new(TRUSTTUNNEL_SERVICE_FILE).exists(),
+        }),
+        &report,
+        Some(vec![crumb(
+            "彻底清理 systemd 文件",
+            "vps-cli reclaim trusttunnel-purge --confirm",
+        )]),
+    );
+    Ok(())
+}
+
+pub fn trusttunnel_purge_shared(
+    output_dir: &str,
+    format: OutputFormat,
+    interactive: bool,
+    confirm: bool,
+) -> Result<(), CliError> {
+    require_confirmation(
+        "危险操作：这将删除 TrustTunnel 安装目录与 systemd 文件，确认继续？",
+        interactive,
+        false,
+        confirm,
+    )?;
+    let mut report = OperationReport::default();
+    let backups = backup_paths(
+        &[output_dir, TRUSTTUNNEL_SERVICE_FILE],
+        "trusttunnel-purge",
+        &mut report,
+    )?;
+    stop_disable_service("trusttunnel");
+    if let Err(err) = remove_if_exists(Path::new(output_dir)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "清理 TrustTunnel 安装目录失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = remove_if_exists(Path::new(TRUSTTUNNEL_SERVICE_FILE)) {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "清理 TrustTunnel systemd 文件失败，已尝试恢复已删除文件。",
+        ));
+    }
+    if let Err(err) = daemon_reload() {
+        return Err(rollback_error(
+            err,
+            &backups,
+            &mut report,
+            "重载 systemd 失败，已尝试恢复已删除文件。",
+        ));
+    }
+    report.changed_files.push(output_dir.into());
+    report.changed_files.push(TRUSTTUNNEL_SERVICE_FILE.into());
+    report.rolled_back = Some(false);
+    emit_success(
+        format,
+        json!({
+            "purged": true,
+            "target": "trusttunnel",
+            "removed_paths": [output_dir, TRUSTTUNNEL_SERVICE_FILE],
+        }),
+        &report,
+        None,
+    );
+    Ok(())
+}
+
 fn collect_proxy_candidates() -> Vec<JsonValue> {
     let service_names = [
         "sing-box.service",
@@ -545,6 +703,54 @@ fn collect_proxy_candidates() -> Vec<JsonValue> {
         }
     }
     dedup_candidates(candidates)
+}
+
+fn normalized_trusttunnel_dir(value: Option<&String>) -> String {
+    let raw = value
+        .map(|item| item.trim())
+        .unwrap_or(TRUSTTUNNEL_DEFAULT_INSTALL_DIR);
+    match raw {
+        "" | "." | "/opt" => TRUSTTUNNEL_DEFAULT_INSTALL_DIR.to_string(),
+        _ => raw.to_string(),
+    }
+}
+
+fn run_trusttunnel_installer_uninstall(output_dir: &str) -> Result<(), CliError> {
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "vps-cli-trusttunnel-uninstall-{}",
+        crate::safety::current_timestamp()
+    ));
+    ensure_dir(&tmp_dir)?;
+    let script_path = tmp_dir.join("install.sh");
+    download_file(TRUSTTUNNEL_INSTALLER_URL, &script_path)?;
+    let output = SysCmd::new("sh")
+        .arg(&script_path)
+        .args(["-u", "-o", output_dir, "-a", "y"])
+        .output()
+        .map_err(|e| CliError::new(format!("执行 TrustTunnel 官方卸载脚本失败: {}", e)))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(CliError::new(format!(
+            "TrustTunnel 官方卸载脚本失败: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )))
+    }
+}
+
+fn download_file(url: &str, dest: &Path) -> Result<(), CliError> {
+    let response =
+        reqwest::blocking::get(url).map_err(|e| CliError::new(format!("下载失败: {}", e)))?;
+    if !response.status().is_success() {
+        return Err(CliError::new(format!(
+            "下载失败：HTTP {}",
+            response.status()
+        )));
+    }
+    let bytes = response
+        .bytes()
+        .map_err(|e| CliError::new(format!("读取下载内容失败: {}", e)))?;
+    fs::write(dest, &bytes).map_err(|e| CliError::new(format!("写入下载文件失败: {}", e)))
 }
 
 fn collect_web_candidates(name: &str) -> Vec<JsonValue> {

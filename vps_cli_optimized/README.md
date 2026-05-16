@@ -197,6 +197,12 @@ sudo vps-cli upgrade
   - 查看完整配置
   - 查看日志
   - 管理服务启停
+- `trusttunnel`
+  - 使用官方安装脚本安装或更新 TrustTunnel 服务端
+  - 执行官方 `setup_wizard` 配置向导
+  - 导出 deeplink / TOML 客户端配置
+  - 查看 `trusttunnel` systemd 服务状态和日志
+  - 提供卸载与彻底清理入口
 - `mieru`
   - 安装或更新 mita
   - 添加 mieru 节点
@@ -398,6 +404,72 @@ vps-cli mieru show-links --show-secrets
 vps-cli mieru status
 ```
 
+### 安装并管理 TrustTunnel 服务端
+
+安装或更新到默认目录：
+
+```bash
+vps-cli trusttunnel install --confirm
+```
+
+指定版本和安装目录：
+
+```bash
+vps-cli trusttunnel install --version 1.0.33 --output-dir /opt/trusttunnel --confirm
+```
+
+仅预览将执行的官方安装动作：
+
+```bash
+vps-cli --json trusttunnel install --dry-run
+```
+
+执行官方配置向导：
+
+```bash
+vps-cli trusttunnel setup-wizard
+```
+
+只查看默认配置文件路径：
+
+```bash
+vps-cli trusttunnel setup-wizard --print-paths
+```
+
+导出客户端 deeplink：
+
+```bash
+vps-cli trusttunnel export-config \
+  --client alice \
+  --address vpn.example.com:443 \
+  --show-secrets
+```
+
+导出 TOML 配置并附带 DNS upstream：
+
+```bash
+vps-cli trusttunnel export-config \
+  --client alice \
+  --address 203.0.113.10:443 \
+  --format toml \
+  --dns-upstream tls://1.1.1.1 \
+  --dns-upstream https://dns.google/dns-query \
+  --show-secrets
+```
+
+查看状态与日志：
+
+```bash
+vps-cli trusttunnel status
+vps-cli trusttunnel logs --lines 100
+```
+
+卸载安装目录内容：
+
+```bash
+vps-cli trusttunnel uninstall --confirm
+```
+
 ### 执行 SSH 加固
 
 ```bash
@@ -448,6 +520,13 @@ vps-cli reclaim audit-nginx
 vps-cli reclaim cleanup-nginx --confirm
 ```
 
+卸载或彻底清理 TrustTunnel：
+
+```bash
+vps-cli reclaim trusttunnel-uninstall --confirm
+vps-cli reclaim trusttunnel-purge --confirm
+```
+
 ## 版本与升级
 
 - 当前 release 最新版本先按 `0.1.1` 处理
@@ -488,6 +567,7 @@ vps-cli reclaim cleanup-nginx --confirm
 - 敏感输出需要显式标志，例如：
   - `vps-cli singbox show-links --show-secrets`
   - `vps-cli singbox show-config --sensitive`
+  - `vps-cli trusttunnel export-config --show-secrets`
   - `vps-cli mieru show-simple-links --show-secrets`
   - `vps-cli mieru show-standard-links --show-secrets`
   - `vps-cli mieru show-config --sensitive`
@@ -518,6 +598,8 @@ JSON 示例：
 - `setup-ssh` 会在写入前备份主配置、托管 drop-in 和 `authorized_keys`，并执行 `sshd -t` 与 `sshd -T` 双重验证。
 - `reclaim` 下的命令属于高风险动作，建议先执行对应 `audit-*` 命令。
 - 自签名证书只适合测试环境。
+- `trusttunnel export-config --show-secrets` 会直接输出 deeplink 或 TOML 配置，包含敏感连接信息，不应贴入公开日志。
+- `trusttunnel setup-wizard` 和官方安装脚本默认围绕 `/opt/trusttunnel` 约定工作；如果自定义安装目录，请同步调整 service template 和配置路径。
 - `mieru show-simple-links --show-secrets` 输出的是 simple 分享链接 `mierus://...`，更适合快速分享单节点参数。
 - `mieru show-standard-links --show-secrets` 输出的是标准分享链接 `mieru://...`，更适合完整客户端配置导入。
 - `show-links`、`show-simple-links --show-secrets`、`show-standard-links --show-secrets`、`show-config --sensitive` 等命令会输出链接、凭据、UUID、证书路径或完整配置，不应贴入公开日志。
@@ -538,8 +620,10 @@ cargo test
 ```bash
 vps-cli --help
 vps-cli singbox --help
+vps-cli trusttunnel --help
 vps-cli mieru --help
 vps-cli reclaim --help
+vps-cli setup-ssh --help
 vps-cli setup-ssh --help
 ```
 
@@ -552,3 +636,8 @@ vps-cli setup-ssh --help
 
 变更时间：2026-05-16
 本次变更概要：将 `mieru add-node --show-secrets` 调整为只返回敏感查看入口，并修复 `singbox install` 在默认最新稳定版下解析官方 release 资产名导致的 404 问题。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：新增独立 `trusttunnel` 命令域，支持包装官方安装脚本进行服务端安装/更新、执行 `setup_wizard`、导出客户端配置，并补充 `reclaim trusttunnel-uninstall` 与 `reclaim trusttunnel-purge` 危险收口动作。

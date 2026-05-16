@@ -13,6 +13,7 @@ fn top_level_help_contains_new_command_groups() {
     assert!(stdout.contains("upgrade"));
     assert!(stdout.contains("setup-ssh"));
     assert!(stdout.contains("singbox"));
+    assert!(stdout.contains("trusttunnel"));
     assert!(stdout.contains("mieru"));
     assert!(stdout.contains("reclaim"));
     assert!(stdout.contains("管理 VPS SSH 和 sing-box 的工具"));

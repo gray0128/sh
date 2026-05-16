@@ -18,4 +18,6 @@ fn reclaim_help_includes_dangerous_subcommands() {
     assert!(stdout.contains("audit-caddy"));
     assert!(stdout.contains("cleanup-caddy"));
     assert!(stdout.contains("mieru-uninstall"));
+    assert!(stdout.contains("trusttunnel-uninstall"));
+    assert!(stdout.contains("trusttunnel-purge"));
 }

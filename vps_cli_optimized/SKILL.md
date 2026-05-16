@@ -49,8 +49,9 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 |---|---|
 | `setup-ssh` | 配置 SSH 端口、AllowUsers、公钥轮换和基础加固项，带备份、校验和自动回滚。 |
 | `singbox` | 安装 sing-box、添加协议节点、查看节点、安全/敏感视图、检查配置、查看日志和管理服务。 |
+| `trusttunnel` | 包装官方安装脚本安装或更新 TrustTunnel 服务端，执行 `setup_wizard`，导出客户端配置，并管理 `trusttunnel` systemd 服务。 |
 | `mieru` | 安装 mita、添加 mieru 节点、查看安全视图、分别查看 simple/standard 分享链接、查看配置和管理 mita 服务。 |
-| `reclaim` | 集中承载高风险收口动作，例如 sing-box 卸载、托管文件清理、代理栈清理、nginx/caddy 清理和 mieru 卸载。 |
+| `reclaim` | 集中承载高风险收口动作，例如 sing-box、TrustTunnel 卸载/清理、代理栈清理、nginx/caddy 清理和 mieru 卸载。 |
 | `version` | 查看当前版本、最新 release 版本、平台架构与下载地址。 |
 | `upgrade` | 下载对应架构的 GitHub Release 资产并升级当前 `vps-cli`。 |
 
@@ -75,6 +76,16 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 6. `vps-cli mieru status --json` — 检查 systemd 状态与 mita 状态。  
 7. `vps-cli mieru add-node --show-secrets --json --confirm` — 仅返回敏感信息查看入口，不再在添加结果中直接内联分享链接。
 
+### 安装并配置 TrustTunnel 服务端
+
+1. `vps-cli trusttunnel install --json --confirm` — 包装官方 `install.sh` 安装或更新 TrustTunnel；默认目录为 `/opt/trusttunnel`。  
+2. `vps-cli trusttunnel setup-wizard` — 执行官方 `setup_wizard` 生成 `vpn.toml`、`hosts.toml`、`credentials.toml`、`rules.toml`。  
+3. `vps-cli trusttunnel status --json` — 查看 systemd 状态、二进制和 service file 是否存在。  
+4. `vps-cli trusttunnel export-config --client alice --address vpn.example.com:443 --show-secrets --json` — 导出敏感 deeplink 或 TOML 客户端配置。  
+5. `vps-cli trusttunnel logs --json --lines 100` — 查看服务日志。  
+6. `vps-cli trusttunnel uninstall --json --confirm` — 执行轻卸载，尽量保留 systemd 文件并提示后续清理。  
+7. `vps-cli reclaim trusttunnel-purge --json --confirm` — 彻底清理 TrustTunnel 安装目录与 systemd 文件。
+
 ### 加固 SSH
 
 1. `vps-cli setup-ssh --port 2222 --user alice --pubkey-file ~/.ssh/id_ed25519.pub --rotate-authorized-key --set-allow-users alice --disable-root-login --disable-password-auth --write-hardening --json --confirm` — 将 SSH 端口改为 2222，轮换 `alice` 的公钥，写入白名单并执行基础加固。  
@@ -95,6 +106,7 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 - CLI 在非交互模式下不会发起提问；涉及危险写操作时必须显式传入 `--confirm`，否则直接失败。
 - `singbox` 节点管理面向服务端 `inbounds` 语义，不再把脚本中的节点能力错误映射为客户端 `outbounds`。
 - `mieru` 作为独立命令域存在，不再挂在 `singbox` 之下。
+- `trusttunnel` 作为独立命令域存在，首版优先包装官方 `install.sh` 与 `setup_wizard`，而不是重写官方安装/问答逻辑。
 - `reclaim` 专门承载卸载、清理、审计等高风险动作，避免与日常管理命令混放。
 - 敏感视图必须由显式标志触发；默认输出优先使用安全视图。
 - 所有数据输出都可通过 `--json` 获得结构化格式；诊断信息不会混入成功数据。
@@ -103,6 +115,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 - 安装 sing-box 或 mita 需要联网下载二进制或安装包，确保服务器能访问 GitHub。
 - 使用 `--self-signed` 生成的证书仅适合测试环境，客户端通常需要允许 insecure。
+- TrustTunnel 官方安装脚本默认围绕 `/opt/trusttunnel` 工作；如果改变安装目录，需要同步检查 service template、`vpn.toml` 与 `hosts.toml` 的路径。
+- `trusttunnel export-config --show-secrets` 会输出完整 deeplink 或 TOML，属于敏感内容。
 - `setup-ssh` 会修改 `sshd_config.d` 并重载 SSH 服务；生产环境执行前应保持当前 SSH 会话不断开，并准备好控制台入口。
 - `show-links`、`show-simple-links --show-secrets`、`show-standard-links --show-secrets`、`show-config --sensitive` 等命令会返回凭据、UUID、私钥或完整配置，不应贴入公开日志。
 - `reclaim` 命令会删除系统文件或 systemd 服务，建议先执行对应的 `audit-*` 命令确认候选项。
@@ -138,3 +152,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 变更时间：2026-05-16
 本次变更概要：同步发布版本线到 `0.1.1`，更新默认最新 release 说明，用于发布 `v0.1.1`。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：新增独立 `trusttunnel` 命令域，支持包装官方安装脚本安装/更新 TrustTunnel 服务端、执行 `setup_wizard`、导出客户端配置，并在 `reclaim` 中补充 TrustTunnel 的卸载与彻底清理动作。

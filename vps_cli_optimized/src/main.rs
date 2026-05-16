@@ -6,6 +6,7 @@ mod safety;
 mod self_update;
 mod setup_ssh;
 mod singbox;
+mod trusttunnel;
 mod utils;
 
 use mieru::handle_mieru;
@@ -13,6 +14,7 @@ use reclaim::handle_reclaim;
 use self_update::{handle_upgrade, handle_version};
 use setup_ssh::handle_setup_ssh;
 use singbox::handle_singbox;
+use trusttunnel::handle_trusttunnel;
 use utils::OutputFormat;
 
 fn build_cli() -> Command {
@@ -44,6 +46,7 @@ fn build_cli() -> Command {
         .subcommand(self_update::upgrade_cli())
         .subcommand(setup_ssh::cli())
         .subcommand(singbox::cli())
+        .subcommand(trusttunnel::cli())
         .subcommand(mieru::cli())
         .subcommand(reclaim::cli())
 }
@@ -81,6 +84,11 @@ fn main() {
         }
         Some(("singbox", sub)) => {
             if let Err(err) = handle_singbox(sub, output_format, no_input) {
+                err.output_and_exit(output_format);
+            }
+        }
+        Some(("trusttunnel", sub)) => {
+            if let Err(err) = handle_trusttunnel(sub, output_format, no_input) {
                 err.output_and_exit(output_format);
             }
         }
