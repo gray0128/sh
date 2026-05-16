@@ -115,9 +115,10 @@ fn version_json_contains_current_version() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let payload: Value = serde_json::from_str(&stdout).expect("stdout 不是 JSON");
+    let expected_version = env!("CARGO_PKG_VERSION");
     assert_eq!(payload["ok"], true);
-    assert_eq!(payload["data"]["current_version"], "0.2.0");
-    assert_eq!(payload["data"]["latest_release_version"], "0.2.0");
+    assert_eq!(payload["data"]["current_version"], expected_version);
+    assert_eq!(payload["data"]["latest_release_version"], expected_version);
 }
 
 #[test]

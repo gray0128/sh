@@ -528,9 +528,7 @@ fn mieru_uninstall(
         ));
     }
     uninstall_mita_package();
-    let _ = SysCmd::new("systemctl")
-        .args(["reset-failed", "mita.service"])
-        .status();
+    run_systemctl_best_effort(&["reset-failed", "mita.service"]);
 
     report.changed_files.push(MIERU_MANAGED_DIR.into());
     report
@@ -809,11 +807,9 @@ fn dedup_candidates(mut items: Vec<JsonValue>) -> Vec<JsonValue> {
 }
 
 fn stop_disable_service(name: &str) {
-    let _ = SysCmd::new("systemctl").args(["stop", name]).status();
-    let _ = SysCmd::new("systemctl").args(["disable", name]).status();
-    let _ = SysCmd::new("systemctl")
-        .args(["reset-failed", name])
-        .status();
+    run_systemctl_best_effort(&["stop", name]);
+    run_systemctl_best_effort(&["disable", name]);
+    run_systemctl_best_effort(&["reset-failed", name]);
 }
 
 fn uninstall_mita_package() {
@@ -827,6 +823,30 @@ fn uninstall_mita_package() {
             .arg("-c")
             .arg("rpm -q mita >/dev/null 2>&1 && (command -v dnf >/dev/null 2>&1 && dnf remove -y mita || command -v yum >/dev/null 2>&1 && yum remove -y mita || command -v zypper >/dev/null 2>&1 && zypper --non-interactive remove mita || rpm -e mita) || true")
             .status();
+    }
+}
+
+fn is_benign_systemctl_stderr(stderr: &str) -> bool {
+    let stderr = stderr.trim().to_ascii_lowercase();
+    stderr.contains("not loaded")
+        || stderr.contains("could not be found")
+        || stderr.contains("does not exist")
+        || stderr.contains("no files found for")
+}
+
+fn run_systemctl_best_effort(args: &[&str]) {
+    let rendered = args.join(" ");
+    match SysCmd::new("systemctl").args(args).output() {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if !stderr.trim().is_empty() && !is_benign_systemctl_stderr(&stderr) {
+                eprintln!("警告: `systemctl {}` 失败: {}", rendered, stderr.trim());
+            }
+        }
+        Err(err) => {
+            eprintln!("警告: 无法执行 `systemctl {}`: {}", rendered, err);
+        }
     }
 }
 
@@ -869,6 +889,31 @@ fn preview_candidates(title: &str, candidates: &[JsonValue], format: OutputForma
     println!("{}:", title);
     for item in candidate_descriptions(candidates) {
         println!("- {}", item);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_benign_systemctl_stderr;
+
+    #[test]
+    fn benign_systemctl_missing_unit_messages_are_ignored() {
+        assert!(is_benign_systemctl_stderr(
+            "Failed to reset failed state of unit sing-box.service: Unit sing-box.service not loaded."
+        ));
+        assert!(is_benign_systemctl_stderr(
+            "Failed to disable unit: Unit file sing-box.service does not exist."
+        ));
+        assert!(is_benign_systemctl_stderr(
+            "Unit sing-box.service could not be found."
+        ));
+    }
+
+    #[test]
+    fn unexpected_systemctl_errors_are_not_ignored() {
+        assert!(!is_benign_systemctl_stderr(
+            "Failed to connect to bus: No such file or directory"
+        ));
     }
 }
 
