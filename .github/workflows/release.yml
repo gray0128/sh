@@ -6,14 +6,19 @@ on:
       - 'v*.*.*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
+        include:
+          - target: x86_64-unknown-linux-gnu
+            arch: amd64
+          - target: aarch64-unknown-linux-gnu
+            arch: arm64
     defaults:
       run:
         working-directory: vps_cli_optimized
@@ -32,11 +37,21 @@ jobs:
       - name: Build
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Upload binary artifact
+      - name: Package release archive
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/vps-cli dist/vps-cli
+          tar -C dist -czf dist/vps-cli-linux-${{ matrix.arch }}.tar.gz vps-cli
+          sha256sum dist/vps-cli-linux-${{ matrix.arch }}.tar.gz | awk '{print $1}' > dist/vps-cli-linux-${{ matrix.arch }}.tar.gz.sha256
+          rm -f dist/vps-cli
+
+      - name: Upload release archive artifact
         uses: actions/upload-artifact@v4
         with:
-          name: vps-cli-${{ matrix.target }}
-          path: vps_cli_optimized/target/${{ matrix.target }}/release/vps-cli
+          name: vps-cli-linux-${{ matrix.arch }}
+          path: |
+            vps_cli_optimized/dist/vps-cli-linux-${{ matrix.arch }}.tar.gz
+            vps_cli_optimized/dist/vps-cli-linux-${{ matrix.arch }}.tar.gz.sha256
           retention-days: 7
 
       - name: Upload README
@@ -52,3 +67,24 @@ jobs:
           name: vps-cli-skill
           path: vps_cli_optimized/SKILL.md
           retention-days: 7
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release archive artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vps-cli-linux-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/vps-cli-linux-amd64.tar.gz
+            dist/vps-cli-linux-amd64.tar.gz.sha256
+            dist/vps-cli-linux-arm64.tar.gz
+            dist/vps-cli-linux-arm64.tar.gz.sha256

@@ -9,6 +9,8 @@ fn top_level_help_contains_new_command_groups() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("version"));
+    assert!(stdout.contains("upgrade"));
     assert!(stdout.contains("setup-ssh"));
     assert!(stdout.contains("singbox"));
     assert!(stdout.contains("mieru"));

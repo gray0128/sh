@@ -16,6 +16,18 @@
 - 高风险写操作默认要求确认
 - 敏感信息输出显式门控
 - 关键写操作带备份、校验与回滚提示
+- 支持查看 release 版本并自升级
+
+## 权限要求
+
+- `--help`、`--version`、`vps-cli version`、`vps-cli upgrade --check` 通常不需要 `root`
+- `vps-cli upgrade` 是否需要 `sudo/root` 取决于当前二进制安装位置：
+  - 如果安装在当前用户可写目录，一般不需要
+  - 如果安装在 `/usr/local/bin`、`/usr/bin` 等系统目录，通常需要 `sudo` 或 `root`
+- `singbox`、`mieru`、`setup-ssh`、`reclaim` 的大多数实际管理命令都会写系统文件、systemd 或防火墙，建议直接以 `root` 身份运行，或在命令前加 `sudo`
+- 对生产 VPS 的推荐做法：
+  - 先 `sudo -i`
+  - 再使用 `vps-cli ...`
 
 ## 安装
 
@@ -41,12 +53,68 @@ sudo install -m 0755 target/release/vps-cli /usr/local/bin/vps-cli
 ### 方式三：使用 GitHub Actions 构建产物
 
 - 为仓库打上形如 `v1.2.3` 的 tag，或手动触发 `Build and Release` workflow。
-- 下载工作流产物中的 `vps-cli-<target>`。
-- 将其中的 `vps-cli` 二进制放到目标主机，例如：
+- 下载 GitHub Release 中的压缩包，当前最新 release 先按 `0.1.0` 提供。
+- 发布资产命名规则：
+  - `vps-cli-linux-amd64.tar.gz`
+  - `vps-cli-linux-arm64.tar.gz`
+- 解压后将其中的 `vps-cli` 二进制放到目标主机，例如：
 
 ```bash
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
+
+### 使用 curl 下载
+
+`amd64 / x86_64`：
+
+```bash
+curl -fL https://github.com/gray0128/sh/releases/download/v0.1.0/vps-cli-linux-amd64.tar.gz -o vps-cli-linux-amd64.tar.gz
+tar -xzf vps-cli-linux-amd64.tar.gz
+sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
+```
+
+`arm64 / aarch64`：
+
+```bash
+curl -fL https://github.com/gray0128/sh/releases/download/v0.1.0/vps-cli-linux-arm64.tar.gz -o vps-cli-linux-arm64.tar.gz
+tar -xzf vps-cli-linux-arm64.tar.gz
+sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
+```
+
+### 使用 wget 下载
+
+`amd64 / x86_64`：
+
+```bash
+wget https://github.com/gray0128/sh/releases/download/v0.1.0/vps-cli-linux-amd64.tar.gz
+tar -xzf vps-cli-linux-amd64.tar.gz
+sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
+```
+
+`arm64 / aarch64`：
+
+```bash
+wget https://github.com/gray0128/sh/releases/download/v0.1.0/vps-cli-linux-arm64.tar.gz
+tar -xzf vps-cli-linux-arm64.tar.gz
+sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
+```
+
+### 不同 VPS 架构下载哪个链接
+
+- `uname -m` 输出 `x86_64`：使用 `amd64` 链接
+- `uname -m` 输出 `aarch64`：使用 `arm64` 链接
+- 可先执行：
+
+```bash
+uname -m
+```
+
+对应下载地址：
+
+- `amd64`：
+  - [v0.1.0 / vps-cli-linux-amd64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.1.0/vps-cli-linux-amd64.tar.gz)
+- `arm64`：
+  - [v0.1.0 / vps-cli-linux-arm64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.1.0/vps-cli-linux-arm64.tar.gz)
 
 建议：
 
@@ -85,6 +153,31 @@ vps-cli setup-ssh --help
 
 ```bash
 vps-cli --version
+vps-cli version
+```
+
+检查是否有新版：
+
+```bash
+vps-cli upgrade --check
+```
+
+升级到最新 release：
+
+```bash
+vps-cli upgrade
+```
+
+升级到指定版本：
+
+```bash
+vps-cli upgrade --version 0.1.0
+```
+
+如果当前安装路径在系统目录，通常需要：
+
+```bash
+sudo vps-cli upgrade
 ```
 
 ## 命令域
@@ -310,6 +403,23 @@ vps-cli reclaim singbox-purge --confirm
 vps-cli reclaim audit-nginx
 vps-cli reclaim cleanup-nginx --confirm
 ```
+
+## 版本与升级
+
+- 当前 release 最新版本先按 `0.1.0` 处理
+- 顶层已有内建版本输出：
+  - `vps-cli --version`
+  - `vps-cli version`
+- `vps-cli version --remote` 会尝试查询 GitHub Release 最新版本；如果远端不可用，会回退到当前约定的最新版本 `0.1.0`
+- `vps-cli upgrade --check` 只检查，不替换当前二进制
+- `vps-cli upgrade` 会：
+  - 判断当前平台架构
+  - 下载对应 release 压缩包
+  - 校验 `.sha256`
+  - 替换当前可执行文件
+- 目前自动升级仅支持 Linux release 包：
+  - `amd64`
+  - `arm64`
 
 ## 输出约定
 

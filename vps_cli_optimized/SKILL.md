@@ -13,7 +13,10 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 - 实际安装后的二进制名为 `vps-cli`。
 - 本地安装可使用 `cargo install --path .`，或执行 `cargo build --release` 后手动安装 `target/release/vps-cli`。
 - GitHub Actions 的发布工作流位于仓库根目录 `.github/workflows/release.yml`，构建目录为 `vps_cli_optimized/`。
-- 工作流上传的产物名称格式为 `vps-cli-<target>`，便于在 Linux 主机上直接安装。
+- Release 资产名称固定为：
+  - `vps-cli-linux-amd64.tar.gz`
+  - `vps-cli-linux-arm64.tar.gz`
+- 当前约定的最新 release 版本先按 `0.1.0` 处理。
 
 ## Output Contract
 
@@ -48,6 +51,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 | `singbox` | 安装 sing-box、添加协议节点、查看节点、安全/敏感视图、检查配置、查看日志和管理服务。 |
 | `mieru` | 安装 mita、添加 mieru 节点、查看安全/敏感视图、查看配置和管理 mita 服务。 |
 | `reclaim` | 集中承载高风险收口动作，例如 sing-box 卸载、托管文件清理、代理栈清理、nginx/caddy 清理和 mieru 卸载。 |
+| `version` | 查看当前版本、最新 release 版本、平台架构与下载地址。 |
+| `upgrade` | 下载对应架构的 GitHub Release 资产并升级当前 `vps-cli`。 |
 
 ## Decision Trees
 
@@ -99,6 +104,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 - `setup-ssh` 会修改 `sshd_config.d` 并重载 SSH 服务；生产环境执行前应保持当前 SSH 会话不断开，并准备好控制台入口。
 - `show-links`、`show-config --sensitive` 等命令会返回凭据、UUID、私钥或完整配置，不应贴入公开日志。
 - `reclaim` 命令会删除系统文件或 systemd 服务，建议先执行对应的 `audit-*` 命令确认候选项。
+- `version` 与 `upgrade --check` 通常不要求 root；`upgrade` 若目标安装目录不可写，则需要 `sudo` 或 `root`。
+- `singbox`、`mieru`、`setup-ssh`、`reclaim` 的实际管理命令大多需要 `root` 或 `sudo`。
 
 ---
 
@@ -109,3 +116,8 @@ vps-cli 是一个用 Rust 编写的命令行工具，用于在 Linux VPS 上安�
 
 变更时间：2026-05-16
 本次变更概要：补充 vps-cli 的实际二进制命名、安装方式和 GitHub Actions 构建产物约定，并对齐根目录工作流位置。
+
+---
+
+变更时间：2026-05-16
+本次变更概要：新增 `version` 与 `upgrade` 命令，同步 release 资产命名、root/sudo 使用约定，以及 Linux amd64/arm64 下载分发规则。

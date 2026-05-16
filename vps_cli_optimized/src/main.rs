@@ -3,12 +3,14 @@ use clap::{Arg, Command};
 mod mieru;
 mod reclaim;
 mod safety;
+mod self_update;
 mod setup_ssh;
 mod singbox;
 mod utils;
 
 use mieru::handle_mieru;
 use reclaim::handle_reclaim;
+use self_update::{handle_upgrade, handle_version};
 use setup_ssh::handle_setup_ssh;
 use singbox::handle_singbox;
 use utils::OutputFormat;
@@ -21,20 +23,25 @@ fn build_cli() -> Command {
             Arg::new("json")
                 .long("json")
                 .help("输出 JSON 格式，便于代理解析")
+                .global(true)
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("plain")
                 .long("plain")
                 .help("输出纯文本表格，不使用颜色和宽表")
+                .global(true)
                 .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("no-input")
                 .long("no-input")
                 .help("禁止交互式输入，如果需要的参数缺失则直接报错")
+                .global(true)
                 .action(clap::ArgAction::SetTrue),
         )
+        .subcommand(self_update::version_cli())
+        .subcommand(self_update::upgrade_cli())
         .subcommand(setup_ssh::cli())
         .subcommand(singbox::cli())
         .subcommand(mieru::cli())
@@ -57,6 +64,16 @@ fn main() {
     };
 
     match matches.subcommand() {
+        Some(("version", sub)) => {
+            if let Err(err) = handle_version(sub, output_format) {
+                err.output_and_exit(output_format);
+            }
+        }
+        Some(("upgrade", sub)) => {
+            if let Err(err) = handle_upgrade(sub, output_format) {
+                err.output_and_exit(output_format);
+            }
+        }
         Some(("setup-ssh", sub)) => {
             if let Err(err) = handle_setup_ssh(sub, output_format, no_input) {
                 err.output_and_exit(output_format);
