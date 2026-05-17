@@ -1926,8 +1926,10 @@ fn check_config(format: OutputFormat) -> Result<(), CliError> {
 fn show_config(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Result<(), CliError> {
     let config = read_singbox_config().ok_or_else(|| CliError::new("未找到 sing-box 配置文件"))?;
     if matches.get_flag("sensitive") {
-        let mut report = OperationReport::default();
-        report.sensitive = Some(true);
+        let mut report = OperationReport {
+            sensitive: Some(true),
+            ..OperationReport::default()
+        };
         report
             .warnings
             .push("完整配置包含密钥、证书路径或凭据，不应贴入公开日志。".into());
@@ -2017,8 +2019,10 @@ fn show_links(matches: &ArgMatches, format: OutputFormat, no_input: bool) -> Res
         .filter(|m| id.as_ref().map(|wanted| wanted == &m.tag).unwrap_or(true))
         .map(|m| json!({"tag": m.tag, "type": m.node_type, "link": m.link, "client_json": m.client_json}))
         .collect();
-    let mut report = OperationReport::default();
-    report.sensitive = Some(true);
+    let mut report = OperationReport {
+        sensitive: Some(true),
+        ..OperationReport::default()
+    };
     report
         .warnings
         .push("当前输出包含敏感凭据，不应贴入公开日志。".into());
@@ -2367,8 +2371,7 @@ fn random_b64url(length: usize) -> String {
         .unwrap_or_else(|| format!("seed-{}", current_timestamp()));
     raw.replace('+', "-")
         .replace('/', "_")
-        .replace('=', "")
-        .replace('\n', "")
+        .replace(['=', '\n'], "")
         .chars()
         .take(length)
         .collect()
@@ -2487,7 +2490,7 @@ fn ss_userinfo(method: &str, password: &str) -> String {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| payload)
+        .unwrap_or(payload)
 }
 
 #[cfg(test)]
