@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::net::TcpListener;
 use std::process::Command;
 
 #[test]
@@ -175,5 +176,37 @@ fn mieru_add_node_show_secrets_only_returns_follow_up_commands() {
     assert_eq!(
         payload["data"]["next_steps"]["show_simple_links"],
         "vps-cli mieru show-simple-links --show-secrets"
+    );
+}
+
+#[test]
+fn port_usage_json_reports_current_listener() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("创建测试监听端口失败");
+    let port = listener
+        .local_addr()
+        .expect("读取监听地址失败")
+        .port()
+        .to_string();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_vps-cli"))
+        .args(["--json", "port", "usage", "--port", &port])
+        .output()
+        .expect("运行命令失败");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let payload: Value = serde_json::from_str(&stdout).expect("stdout 不是 JSON");
+    assert_eq!(payload["ok"], true);
+    assert!(matches!(
+        payload["data"]["backend"].as_str(),
+        Some("ss") | Some("lsof")
+    ));
+    let entries = payload["data"]["entries"]
+        .as_array()
+        .expect("entries 不是数组");
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["port"].as_u64() == Some(port.parse::<u64>().unwrap()))
     );
 }

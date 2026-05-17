@@ -2,6 +2,7 @@ use clap::{Arg, Command};
 
 mod firewall;
 mod mieru;
+mod port;
 mod reclaim;
 mod safety;
 mod self_update;
@@ -12,6 +13,7 @@ mod utils;
 
 use firewall::handle_firewall;
 use mieru::handle_mieru;
+use port::handle_port;
 use reclaim::handle_reclaim;
 use self_update::{handle_upgrade, handle_version};
 use setup_ssh::handle_setup_ssh;
@@ -48,6 +50,7 @@ fn build_cli() -> Command {
         .subcommand(self_update::upgrade_cli())
         .subcommand(setup_ssh::cli())
         .subcommand(firewall::cli())
+        .subcommand(port::cli())
         .subcommand(singbox::cli())
         .subcommand(trusttunnel::cli())
         .subcommand(mieru::cli())
@@ -87,6 +90,11 @@ fn main() {
         }
         Some(("firewall", sub)) => {
             if let Err(err) = handle_firewall(sub, output_format, no_input) {
+                err.output_and_exit(output_format);
+            }
+        }
+        Some(("port", sub)) => {
+            if let Err(err) = handle_port(sub, output_format, no_input) {
                 err.output_and_exit(output_format);
             }
         }
