@@ -1273,7 +1273,7 @@ fn tls_protocol_command(name: &'static str, about: &'static str, network: &'stat
             Arg::new("server-name")
                 .long("server-name")
                 .value_name("SNI")
-                .help("TLS SNI / 证书域名；默认与 --server 相同"),
+                .help("TLS SNI / 证书域名；默认与 --server 相同；TUIC 在 IP + --self-signed 时可省略"),
         )
         .arg(
             Arg::new("cert-path")
@@ -1328,6 +1328,7 @@ fn add_vless_reality(
         matches.get_one::<String>("server-name").cloned(),
         &server,
         interactive,
+        false,
         "连接地址是 IP，请输入 Reality 握手域名 / SNI",
         "当 --server 为 IP 时，VLESS Reality 必须显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
     )?;
@@ -1444,6 +1445,7 @@ fn add_trojan_tls(
         matches.get_one::<String>("server-name").cloned(),
         &server,
         interactive,
+        false,
         "连接地址是 IP，请输入 TLS SNI / 证书域名",
         "当 --server 为 IP 时，请显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
     )?;
@@ -1525,6 +1527,7 @@ fn add_hysteria2_tls(
         matches.get_one::<String>("server-name").cloned(),
         &server,
         interactive,
+        false,
         "连接地址是 IP，请输入 TLS SNI / 证书域名",
         "当 --server 为 IP 时，请显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
     )?;
@@ -1611,8 +1614,9 @@ fn add_tuic_tls(
         matches.get_one::<String>("server-name").cloned(),
         &server,
         interactive,
+        matches.get_flag("self-signed"),
         "连接地址是 IP，请输入 TLS SNI / 证书域名",
-        "当 --server 为 IP 时，请显式提供 --server-name；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
+        "当 --server 为 IP 时，请显式提供 --server-name；如果你使用 --self-signed，则可省略并默认使用该 IP；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
     )?;
     let uuid = matches
         .get_one::<String>("uuid")
@@ -2327,6 +2331,7 @@ fn resolve_server_name(
     explicit: Option<String>,
     server: &str,
     interactive: bool,
+    allow_ip_default: bool,
     prompt: &str,
     non_interactive_error: &str,
 ) -> Result<String, CliError> {
@@ -2336,7 +2341,7 @@ fn resolve_server_name(
             return Ok(trimmed.to_string());
         }
     }
-    if !is_ip_host(server) {
+    if !is_ip_host(server) || allow_ip_default {
         return Ok(server.to_string());
     }
     if interactive {
@@ -2603,8 +2608,15 @@ mod tests {
 
     #[test]
     fn resolve_server_name_reuses_domain_server() {
-        let server_name =
-            resolve_server_name(None, "edge.example.com", false, "ignored", "ignored").unwrap();
+        let server_name = resolve_server_name(
+            None,
+            "edge.example.com",
+            false,
+            false,
+            "ignored",
+            "ignored",
+        )
+        .unwrap();
         assert_eq!(server_name, "edge.example.com");
     }
 
@@ -2614,11 +2626,19 @@ mod tests {
             None,
             "1.2.3.4",
             false,
+            false,
             "请输入 TLS SNI / 证书域名",
             "当 --server 为 IP 时，请显式提供 --server-name",
         )
         .unwrap_err();
         assert!(err.message.contains("显式提供 --server-name"));
+    }
+
+    #[test]
+    fn resolve_server_name_allows_ip_default_when_enabled() {
+        let server_name =
+            resolve_server_name(None, "1.2.3.4", false, true, "ignored", "ignored").unwrap();
+        assert_eq!(server_name, "1.2.3.4");
     }
 
     #[test]
