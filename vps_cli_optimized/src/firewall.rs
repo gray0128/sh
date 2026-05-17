@@ -482,7 +482,7 @@ fn emit_success(
             println!("{}", serde_json::to_string(&env).unwrap());
         }
         OutputFormat::Plain => {
-            println!("{}", render_plain_table(data));
+            println!("{}", render_plain_tsv(data));
             if !report.warnings.is_empty() {
                 println!();
                 for item in &report.warnings {
@@ -509,18 +509,14 @@ fn crumb(action: &str, cmd: &str) -> Breadcrumb {
     }
 }
 
-fn render_plain_table(data: &FirewallPortsOutput) -> String {
-    let mut lines = vec![
-        format!("backend: {}", data.backend),
-        format!(
-            "filter_port: {}",
-            data.filter_port
-                .map(|port| port.to_string())
-                .unwrap_or_else(|| "all".to_string())
-        ),
-        format!("entry_count: {}", data.entry_count),
-    ];
-    lines.push(render_entries_table(&data.entries));
+fn render_plain_tsv(data: &FirewallPortsOutput) -> String {
+    let mut lines = vec!["port\tprotocol\tfamily\taction\tbackend".to_string()];
+    for entry in &data.entries {
+        lines.push(format!(
+            "{}\t{}\t{}\t{}\t{}",
+            entry.port, entry.protocol, entry.family, entry.action, data.backend
+        ));
+    }
     lines.join("\n")
 }
 
@@ -730,5 +726,40 @@ To                         Action      From
         let rendered = render_entries_table(&[]);
         assert!(rendered.contains("端口"));
         assert!(rendered.contains("未匹配到开放规则"));
+    }
+
+    #[test]
+    fn render_plain_tsv_uses_header_and_tab_separators() {
+        let data = FirewallPortsOutput {
+            backend: "ufw".into(),
+            filter_port: None,
+            entry_count: 1,
+            entries: vec![FirewallPortEntry {
+                port: "443".into(),
+                protocol: "tcp".into(),
+                family: "ipv4".into(),
+                action: "ALLOW".into(),
+            }],
+        };
+
+        let rendered = render_plain_tsv(&data);
+        assert!(rendered.starts_with("port\tprotocol\tfamily\taction\tbackend"));
+        assert!(rendered.contains("\n443\ttcp\tipv4\tALLOW\tufw"));
+        assert!(!rendered.contains("filter_port:"));
+    }
+
+    #[test]
+    fn render_plain_tsv_keeps_header_when_empty() {
+        let data = FirewallPortsOutput {
+            backend: "iptables".into(),
+            filter_port: Some(1234),
+            entry_count: 0,
+            entries: vec![],
+        };
+
+        assert_eq!(
+            render_plain_tsv(&data),
+            "port\tprotocol\tfamily\taction\tbackend"
+        );
     }
 }
