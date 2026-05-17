@@ -1,6 +1,6 @@
 # vps-cli
 
-面向 VPS 场景的 Rust CLI，用于管理 `sing-box`、`mita/mieru` 和 SSH 加固。
+面向 VPS 场景的 Rust CLI，用于管理 `sing-box`、`mita/mieru`、防火墙查询和 SSH 加固。
 
 适用场景：
 
@@ -25,6 +25,7 @@
   - 如果安装在当前用户可写目录，一般不需要
   - 如果安装在 `/usr/local/bin`、`/usr/bin` 等系统目录，通常需要 `sudo` 或 `root`
 - `singbox`、`mieru`、`setup-ssh`、`reclaim` 的大多数实际管理命令都会写系统文件、systemd 或防火墙，建议直接以 `root` 身份运行，或在命令前加 `sudo`
+- `firewall ports` 当前会读取 Ubuntu 上的防火墙状态，也建议以 `root` 身份运行，避免权限或规则可见性差异
 - 对生产 VPS 的推荐做法：
   - 先 `sudo -i`
   - 再使用 `vps-cli ...`
@@ -50,10 +51,10 @@ cargo build --release
 sudo install -m 0755 target/release/vps-cli /usr/local/bin/vps-cli
 ```
 
-### 方式三：使用 GitHub Actions 构建产物
+### 方式三：使用 GitHub Release 二进制
 
-- 为仓库打上形如 `v1.2.3` 的 tag，或手动触发 `Build and Release` workflow。
-- 下载 GitHub Release 中的压缩包，当前最新 release 先按 `0.2.0` 提供。
+- 直接下载 GitHub Release 中的压缩包。
+- 当前最新 release 为 `0.3.2`。
 - 发布资产命名规则：
   - `vps-cli-linux-amd64.tar.gz`
   - `vps-cli-linux-arm64.tar.gz`
@@ -68,7 +69,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `amd64 / x86_64`：
 
 ```bash
-curl -fL https://github.com/gray0128/sh/releases/download/v0.2.0/vps-cli-linux-amd64.tar.gz -o vps-cli-linux-amd64.tar.gz
+curl -fL https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-amd64.tar.gz -o vps-cli-linux-amd64.tar.gz
 tar -xzf vps-cli-linux-amd64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -76,7 +77,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `arm64 / aarch64`：
 
 ```bash
-curl -fL https://github.com/gray0128/sh/releases/download/v0.2.0/vps-cli-linux-arm64.tar.gz -o vps-cli-linux-arm64.tar.gz
+curl -fL https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-arm64.tar.gz -o vps-cli-linux-arm64.tar.gz
 tar -xzf vps-cli-linux-arm64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -86,7 +87,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `amd64 / x86_64`：
 
 ```bash
-wget https://github.com/gray0128/sh/releases/download/v0.2.0/vps-cli-linux-amd64.tar.gz
+wget https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-amd64.tar.gz
 tar -xzf vps-cli-linux-amd64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -94,7 +95,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `arm64 / aarch64`：
 
 ```bash
-wget https://github.com/gray0128/sh/releases/download/v0.2.0/vps-cli-linux-arm64.tar.gz
+wget https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-arm64.tar.gz
 tar -xzf vps-cli-linux-arm64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -112,14 +113,14 @@ uname -m
 对应下载地址：
 
 - `amd64`：
-  - [v0.2.0 / vps-cli-linux-amd64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.2.0/vps-cli-linux-amd64.tar.gz)
+  - [v0.3.2 / vps-cli-linux-amd64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-amd64.tar.gz)
 - `arm64`：
-  - [v0.2.0 / vps-cli-linux-arm64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.2.0/vps-cli-linux-arm64.tar.gz)
+  - [v0.3.2 / vps-cli-linux-arm64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-arm64.tar.gz)
 
 建议：
 
 - 本机开发调试优先使用 `cargo install --path .` 或 `cargo build --release`
-- 在 CI/CD 或多台服务器分发时优先使用 GitHub Actions 产物
+- 在 CI/CD 或多台服务器分发时优先使用 GitHub Release 二进制
 
 ## 基本约定
 
@@ -143,6 +144,7 @@ uname -m
 
 ```bash
 vps-cli --help
+vps-cli firewall --help
 vps-cli singbox --help
 vps-cli mieru --help
 vps-cli reclaim --help
@@ -171,7 +173,7 @@ vps-cli upgrade
 升级到指定版本：
 
 ```bash
-vps-cli upgrade --version 0.2.0
+vps-cli upgrade --version 0.3.2
 ```
 
 如果当前安装路径在系统目录，通常需要：
@@ -189,6 +191,11 @@ sudo vps-cli upgrade
   - 可选禁用 root SSH 登录
   - 可选禁用全局密码认证
   - 可选写入基础 SSH 加固项
+- `firewall`
+  - 查看 Ubuntu 防火墙开放端口与协议
+  - 支持查看全部规则
+  - 支持按端口过滤
+  - 兼容 `ufw`、`nftables`、`iptables`
 - `singbox`
   - 安装或更新 sing-box
   - 添加 `VLESS Reality`、`Trojan TLS`、`Hysteria2 TLS`、`TUIC TLS`、`Shadowsocks` 节点
@@ -353,6 +360,27 @@ vps-cli singbox show-config --sensitive
 ```bash
 vps-cli singbox logs --lines 100
 ```
+
+### 查看防火墙开放端口与协议
+
+查看全部开放规则：
+
+```bash
+sudo vps-cli firewall ports
+```
+
+仅查看指定端口：
+
+```bash
+sudo vps-cli firewall ports --port 443
+```
+
+输出说明：
+
+- 默认输出：中文摘要 + 对齐表格
+- `--plain`：输出 TSV，字段为 `port protocol family action backend`
+- `--json`：输出结构化 JSON
+- `--plain` 下的 warning 会输出到 `stderr`，不会污染 `stdout`
 
 ### 安装 mita 并添加 mieru 节点
 
@@ -529,16 +557,12 @@ vps-cli reclaim trusttunnel-purge --confirm
 
 ## 版本与升级
 
-- 当前 release 最新版本先按 `0.2.0` 处理
+- 当前 release 最新版本为 `0.3.2`
 - 顶层已有内建版本输出：
   - `vps-cli --version`
   - `vps-cli version`
-- `vps-cli version --remote` 会尝试查询 GitHub Release 最新版本；如果远端不可用，会回退到当前约定的最新版本 `0.2.0`
+- `vps-cli version --remote` 会尝试查询 GitHub Release 最新版本；如果远端不可用，会回退到当前二进制内建版本
 
----
-
-变更时间：2026-05-16
-本次变更概要：同步发布版本线到 `0.2.0`，更新安装下载链接、自升级示例和版本说明，并用于发布 `v0.2.0` release。
 - `vps-cli upgrade --check` 只检查，不替换当前二进制
 - `vps-cli upgrade` 会：
   - 判断当前平台架构
@@ -619,25 +643,10 @@ cargo test
 
 ```bash
 vps-cli --help
+vps-cli firewall --help
 vps-cli singbox --help
 vps-cli trusttunnel --help
 vps-cli mieru --help
 vps-cli reclaim --help
 vps-cli setup-ssh --help
-vps-cli setup-ssh --help
 ```
-
----
-
-变更时间：2026-05-16
-本次变更概要：为 `mieru` 新增 simple/standard 分享链接的独立命令，并在交互式 `add-node` 中加入 `TCP/UDP` 协议选择提示。
-
----
-
-变更时间：2026-05-16
-本次变更概要：将 `mieru add-node --show-secrets` 调整为只返回敏感查看入口，并修复 `singbox install` 在默认最新稳定版下解析官方 release 资产名导致的 404 问题。
-
----
-
-变更时间：2026-05-16
-本次变更概要：新增独立 `trusttunnel` 命令域，支持包装官方安装脚本进行服务端安装/更新、执行 `setup_wizard`、导出客户端配置，并补充 `reclaim trusttunnel-uninstall` 与 `reclaim trusttunnel-purge` 危险收口动作。
