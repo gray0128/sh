@@ -1,6 +1,6 @@
 use clap::{Arg, ArgMatches, Command};
 use serde::Serialize;
-use serde_json::{json, Value as JsonValue};
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;
 use std::process::Command as SysCmd;
@@ -66,7 +66,7 @@ fn handle_ports(matches: &ArgMatches, format: OutputFormat) -> Result<(), CliErr
 
     emit_success(
         format,
-        json!(data),
+        &data,
         &report,
         Some(vec![crumb(
             "query_firewall_ports",
@@ -466,23 +466,32 @@ fn port_spec_matches(spec: &str, port: u16) -> bool {
 
 fn emit_success(
     format: OutputFormat,
-    data: JsonValue,
+    data: &FirewallPortsOutput,
     report: &OperationReport,
     breadcrumbs: Option<Vec<Breadcrumb>>,
 ) {
     match format {
         OutputFormat::Json => {
             let env = if let Some(crumbs) = breadcrumbs {
-                OutputEnvelope::success(data)
+                OutputEnvelope::success(json!(data))
                     .with_report(report)
                     .with_breadcrumbs(crumbs)
             } else {
-                OutputEnvelope::success(data).with_report(report)
+                OutputEnvelope::success(json!(data)).with_report(report)
             };
             println!("{}", serde_json::to_string(&env).unwrap());
         }
-        _ => {
-            println!("{}", serde_json::to_string_pretty(&data).unwrap());
+        OutputFormat::Plain => {
+            println!("{}", render_plain_table(data));
+            if !report.warnings.is_empty() {
+                println!();
+                for item in &report.warnings {
+                    println!("警告: {}", item);
+                }
+            }
+        }
+        OutputFormat::Human => {
+            println!("{}", render_human_table(data));
             if !report.warnings.is_empty() {
                 println!("\n警告:");
                 for item in &report.warnings {
@@ -498,6 +507,86 @@ fn crumb(action: &str, cmd: &str) -> Breadcrumb {
         action: action.into(),
         cmd: cmd.into(),
     }
+}
+
+fn render_plain_table(data: &FirewallPortsOutput) -> String {
+    let mut lines = vec![
+        format!("backend: {}", data.backend),
+        format!(
+            "filter_port: {}",
+            data.filter_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "all".to_string())
+        ),
+        format!("entry_count: {}", data.entry_count),
+    ];
+    lines.push(render_entries_table(&data.entries));
+    lines.join("\n")
+}
+
+fn render_human_table(data: &FirewallPortsOutput) -> String {
+    let mut lines = vec![
+        format!("防火墙: {}", data.backend),
+        format!(
+            "筛选端口: {}",
+            data.filter_port
+                .map(|port| port.to_string())
+                .unwrap_or_else(|| "全部".to_string())
+        ),
+        format!("匹配规则: {}", data.entry_count),
+    ];
+    lines.push(render_entries_table(&data.entries));
+    lines.join("\n")
+}
+
+fn render_entries_table(entries: &[FirewallPortEntry]) -> String {
+    let port_width = entries
+        .iter()
+        .map(|item| item.port.len())
+        .max()
+        .unwrap_or(2)
+        .max("端口".len());
+    let protocol_width = entries
+        .iter()
+        .map(|item| item.protocol.len())
+        .max()
+        .unwrap_or(2)
+        .max("协议".len());
+    let family_width = entries
+        .iter()
+        .map(|item| item.family.len())
+        .max()
+        .unwrap_or(2)
+        .max("地址族".len());
+    let action_width = entries
+        .iter()
+        .map(|item| item.action.len())
+        .max()
+        .unwrap_or(2)
+        .max("动作".len());
+
+    let header = format!(
+        "{:<port_width$}  {:<protocol_width$}  {:<family_width$}  {:<action_width$}",
+        "端口", "协议", "地址族", "动作"
+    );
+    let separator = format!(
+        "{:-<port_width$}  {:-<protocol_width$}  {:-<family_width$}  {:-<action_width$}",
+        "", "", "", ""
+    );
+
+    let mut lines = vec![header, separator];
+    if entries.is_empty() {
+        lines.push("未匹配到开放规则".into());
+        return lines.join("\n");
+    }
+
+    for entry in entries {
+        lines.push(format!(
+            "{:<port_width$}  {:<protocol_width$}  {:<family_width$}  {:<action_width$}",
+            entry.port, entry.protocol, entry.family, entry.action
+        ));
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
@@ -603,5 +692,43 @@ To                         Action      From
                 action: "ACCEPT".into(),
             }]
         );
+    }
+
+    #[test]
+    fn render_human_table_contains_summary_and_rows() {
+        let data = FirewallPortsOutput {
+            backend: "ufw".into(),
+            filter_port: Some(443),
+            entry_count: 2,
+            entries: vec![
+                FirewallPortEntry {
+                    port: "22".into(),
+                    protocol: "tcp".into(),
+                    family: "ipv4".into(),
+                    action: "ALLOW".into(),
+                },
+                FirewallPortEntry {
+                    port: "443".into(),
+                    protocol: "tcp".into(),
+                    family: "ipv6".into(),
+                    action: "ALLOW".into(),
+                },
+            ],
+        };
+
+        let rendered = render_human_table(&data);
+        assert!(rendered.contains("防火墙: ufw"));
+        assert!(rendered.contains("筛选端口: 443"));
+        assert!(rendered.contains("匹配规则: 2"));
+        assert!(rendered.contains("端口"));
+        assert!(rendered.contains("443"));
+        assert!(rendered.contains("ipv6"));
+    }
+
+    #[test]
+    fn render_entries_table_handles_empty_rows() {
+        let rendered = render_entries_table(&[]);
+        assert!(rendered.contains("端口"));
+        assert!(rendered.contains("未匹配到开放规则"));
     }
 }
