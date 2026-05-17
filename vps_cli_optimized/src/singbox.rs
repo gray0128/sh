@@ -811,11 +811,11 @@ fn service_action(action: &str, format: OutputFormat) -> Result<(), CliError> {
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             match action {
                 "status" => {
-                    let status_str = if success {
-                        String::from_utf8_lossy(&output.stdout).trim().to_string()
-                    } else {
-                        "unknown".to_string()
-                    };
+                    let status_str = parse_systemctl_is_active_status(
+                        &String::from_utf8_lossy(&output.stdout),
+                        &stderr,
+                        success,
+                    );
                     let mut report = OperationReport::default();
                     if !stderr.is_empty() {
                         report.warnings.push(stderr);
@@ -872,6 +872,21 @@ fn service_action(action: &str, format: OutputFormat) -> Result<(), CliError> {
         Err(e) => return Err(CliError::new(format!("执行 systemctl 命令失败: {}", e))),
     }
     Ok(())
+}
+
+fn parse_systemctl_is_active_status(stdout: &str, stderr: &str, success: bool) -> String {
+    let stdout = stdout.trim();
+    if !stdout.is_empty() {
+        return stdout.to_string();
+    }
+    if success {
+        return "active".to_string();
+    }
+    let stderr = stderr.trim();
+    if stderr.contains("could not be found") || stderr.contains("not found") {
+        return "not-found".to_string();
+    }
+    "failed".to_string()
 }
 
 fn detect_arch() -> Option<&'static str> {
@@ -2213,7 +2228,51 @@ fn generate_self_signed(server: &str) -> Result<(String, String, bool), CliError
     if !status.success() {
         return Err(CliError::new("生成自签名证书失败"));
     }
+    ensure_cert_permissions_for_service(&dir, &cert, &key)?;
     Ok((cert.display().to_string(), key.display().to_string(), true))
+}
+
+fn ensure_cert_permissions_for_service(
+    dir: &Path,
+    cert: &Path,
+    key: &Path,
+) -> Result<(), CliError> {
+    set_path_mode(dir, 0o750)?;
+    set_path_mode(cert, 0o644)?;
+    set_path_mode(key, 0o640)?;
+
+    let chown_target = "sing-box:sing-box";
+    for path in [dir, cert, key] {
+        let status = SysCmd::new("chown")
+            .args([chown_target, path.to_string_lossy().as_ref()])
+            .status()
+            .map_err(|e| CliError::new(format!("修正证书文件属主失败: {}", e)))?;
+        if !status.success() {
+            return Err(CliError::new(format!(
+                "修正证书文件属主失败: {}",
+                path.display()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn set_path_mode(path: &Path, mode: u32) -> Result<(), CliError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = fs::metadata(path)
+        .map_err(|e| CliError::new(format!("读取文件权限失败: {}", e)))?
+        .permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).map_err(|e| {
+        CliError::new(format!(
+            "设置文件权限失败: {}: {}",
+            path.display(),
+            e
+        ))
+    })?;
+    Ok(())
 }
 
 fn generate_reality_keypair() -> Result<(String, String), CliError> {
@@ -2496,6 +2555,7 @@ fn ss_userinfo(method: &str, password: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn normalize_version_accepts_plain_and_prefixed_values() {
@@ -2656,5 +2716,38 @@ mod tests {
         let inbound = find_inbound_by_id(&config, "1").unwrap();
         assert_eq!(inbound["type"], "vless");
         assert_eq!(inbound["listen_port"], 443);
+    }
+
+    #[test]
+    fn parse_systemctl_is_active_status_preserves_failed_stdout() {
+        assert_eq!(
+            parse_systemctl_is_active_status("failed\n", "", false),
+            "failed"
+        );
+    }
+
+    #[test]
+    fn parse_systemctl_is_active_status_marks_missing_service() {
+        assert_eq!(
+            parse_systemctl_is_active_status("", "Unit sing-box.service could not be found.", false),
+            "not-found"
+        );
+    }
+
+    #[test]
+    fn set_path_mode_updates_file_mode() {
+        let file_path = std::env::temp_dir().join(format!(
+            "vps-cli-singbox-mode-{}-{}.tmp",
+            std::process::id(),
+            current_timestamp()
+        ));
+        fs::write(&file_path, "demo").unwrap();
+
+        set_path_mode(&file_path, 0o640).unwrap();
+
+        let mode = fs::metadata(&file_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+
+        let _ = fs::remove_file(file_path);
     }
 }
