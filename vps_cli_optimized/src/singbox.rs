@@ -1453,7 +1453,8 @@ fn add_trojan_tls(
         .get_one::<String>("password")
         .cloned()
         .unwrap_or_else(|| random_b64url(24));
-    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server_name)?;
+    let (cert_path, key_path, insecure) =
+        resolve_tls_material(matches, interactive, &server_name, None)?;
     let listen = matches
         .get_one::<String>("listen")
         .cloned()
@@ -1539,7 +1540,8 @@ fn add_hysteria2_tls(
         .get_one::<String>("obfs-password")
         .cloned()
         .unwrap_or_else(|| random_b64url(18));
-    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server_name)?;
+    let (cert_path, key_path, insecure) =
+        resolve_tls_material(matches, interactive, &server_name, None)?;
     let listen = matches
         .get_one::<String>("listen")
         .cloned()
@@ -1610,11 +1612,12 @@ fn add_tuic_tls(
         .get_one::<String>("tag")
         .cloned()
         .unwrap_or_else(|| format!("tuic-{}", short_hex(4)));
+    let preselected_self_signed = resolve_tuic_self_signed_preference(matches, interactive, &server)?;
     let server_name = resolve_server_name(
         matches.get_one::<String>("server-name").cloned(),
         &server,
         interactive,
-        matches.get_flag("self-signed"),
+        preselected_self_signed == Some(true),
         "连接地址是 IP，请输入 TLS SNI / 证书域名",
         "当 --server 为 IP 时，请显式提供 --server-name；如果你使用 --self-signed，则可省略并默认使用该 IP；如果你确实要使用 IP 作为 SNI，也请显式传入相同 IP。",
     )?;
@@ -1626,7 +1629,8 @@ fn add_tuic_tls(
         .get_one::<String>("password")
         .cloned()
         .unwrap_or_else(|| random_b64url(20));
-    let (cert_path, key_path, insecure) = resolve_tls_material(matches, interactive, &server_name)?;
+    let (cert_path, key_path, insecure) =
+        resolve_tls_material(matches, interactive, &server_name, preselected_self_signed)?;
     let listen = matches
         .get_one::<String>("listen")
         .cloned()
@@ -2176,6 +2180,7 @@ fn resolve_tls_material(
     matches: &ArgMatches,
     interactive: bool,
     server: &str,
+    preselected_self_signed: Option<bool>,
 ) -> Result<(String, String, bool), CliError> {
     let cert = matches.get_one::<String>("cert-path").cloned();
     let key = matches.get_one::<String>("key-path").cloned();
@@ -2183,10 +2188,15 @@ fn resolve_tls_material(
     if let (Some(cert), Some(key)) = (cert, key) {
         return Ok((cert, key, false));
     }
-    if self_signed {
+    if self_signed || preselected_self_signed == Some(true) {
         return generate_self_signed(server);
     }
     if interactive {
+        if preselected_self_signed == Some(false) {
+            let cert_path = required_or_prompt(None, "请输入证书路径", true)?;
+            let key_path = required_or_prompt(None, "请输入私钥路径", true)?;
+            return Ok((cert_path, key_path, false));
+        }
         let use_self_signed = Confirm::new()
             .with_prompt("未提供证书路径，是否自动生成自签名证书？")
             .default(true)
@@ -2203,6 +2213,40 @@ fn resolve_tls_material(
             "TLS 节点需要提供 --cert-path/--key-path，或显式传入 --self-signed",
         ))
     }
+}
+
+fn resolve_tuic_self_signed_preference(
+    matches: &ArgMatches,
+    interactive: bool,
+    server: &str,
+) -> Result<Option<bool>, CliError> {
+    if matches.get_flag("self-signed") {
+        return Ok(Some(true));
+    }
+    if !should_preselect_tuic_self_signed_prompt(matches, interactive, server) {
+        return Ok(None);
+    }
+    let use_self_signed = Confirm::new()
+        .with_prompt("未提供证书路径，是否自动生成自签名证书？")
+        .default(true)
+        .interact()
+        .map_err(|e| CliError::new(format!("读取确认失败: {}", e)))?;
+    Ok(Some(use_self_signed))
+}
+
+fn should_preselect_tuic_self_signed_prompt(
+    matches: &ArgMatches,
+    interactive: bool,
+    server: &str,
+) -> bool {
+    interactive
+        && is_ip_host(server)
+        && matches
+            .get_one::<String>("server-name")
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+        && matches.get_one::<String>("cert-path").is_none()
+        && matches.get_one::<String>("key-path").is_none()
 }
 
 fn generate_self_signed(server: &str) -> Result<(String, String, bool), CliError> {
@@ -2639,6 +2683,50 @@ mod tests {
         let server_name =
             resolve_server_name(None, "1.2.3.4", false, true, "ignored", "ignored").unwrap();
         assert_eq!(server_name, "1.2.3.4");
+    }
+
+    #[test]
+    fn should_preselect_tuic_self_signed_prompt_for_interactive_ip_without_server_name() {
+        let matches = cli()
+            .try_get_matches_from([
+                "singbox",
+                "add-tuic-tls",
+                "--server",
+                "1.2.3.4",
+                "--port",
+                "60002",
+            ])
+            .unwrap();
+        let sub = matches.subcommand_matches("add-tuic-tls").unwrap();
+
+        assert!(should_preselect_tuic_self_signed_prompt(
+            sub,
+            true,
+            "1.2.3.4"
+        ));
+    }
+
+    #[test]
+    fn should_not_preselect_tuic_self_signed_when_server_name_is_explicit() {
+        let matches = cli()
+            .try_get_matches_from([
+                "singbox",
+                "add-tuic-tls",
+                "--server",
+                "1.2.3.4",
+                "--port",
+                "60002",
+                "--server-name",
+                "example.com",
+            ])
+            .unwrap();
+        let sub = matches.subcommand_matches("add-tuic-tls").unwrap();
+
+        assert!(!should_preselect_tuic_self_signed_prompt(
+            sub,
+            true,
+            "1.2.3.4"
+        ));
     }
 
     #[test]
