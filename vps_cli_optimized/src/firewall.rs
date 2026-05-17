@@ -484,9 +484,9 @@ fn emit_success(
         OutputFormat::Plain => {
             println!("{}", render_plain_tsv(data));
             if !report.warnings.is_empty() {
-                println!();
+                eprintln!();
                 for item in &report.warnings {
-                    println!("警告: {}", item);
+                    eprintln!("警告: {}", item);
                 }
             }
         }
@@ -761,5 +761,24 @@ To                         Action      From
             render_plain_tsv(&data),
             "port\tprotocol\tfamily\taction\tbackend"
         );
+    }
+
+    #[test]
+    fn plain_warnings_should_not_be_embedded_in_tsv_renderer() {
+        let data = FirewallPortsOutput {
+            backend: "ufw".into(),
+            filter_port: Some(443),
+            entry_count: 1,
+            entries: vec![FirewallPortEntry {
+                port: "443".into(),
+                protocol: "tcp".into(),
+                family: "ipv4".into(),
+                action: "ALLOW".into(),
+            }],
+        };
+
+        let rendered = render_plain_tsv(&data);
+        assert!(!rendered.contains("警告:"));
+        assert_eq!(rendered.lines().count(), 2);
     }
 }
