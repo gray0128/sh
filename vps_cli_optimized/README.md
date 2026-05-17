@@ -261,6 +261,22 @@ vps-cli --no-input singbox add-vless-reality \
   --confirm
 ```
 
+`TUIC + IP + 自签证书` 的非交互示例：
+
+```bash
+vps-cli --no-input singbox add-tuic-tls \
+  --server 1.2.3.4 \
+  --port 60002 \
+  --self-signed \
+  --confirm
+```
+
+补充说明：
+
+- 当 `add-tuic-tls` 的 `--server` 为 IP，且显式传入 `--self-signed` 时，现在可以省略 `--server-name`
+- 此时 CLI 会默认使用该 IP 作为 TLS SNI / 证书标识
+- 如果不是 `--self-signed` 场景，IP 模式下仍建议显式传入 `--server-name`
+
 ### `add-node` 的区别
 
 - `singbox add-node`：通用 JSON 导入模式，必须自己准备好 JSON 文件
@@ -330,6 +346,35 @@ vps-cli singbox add-vless-reality \
 
 - 如果未显式提供全部参数，交互模式下会继续询问
 - `mieru add-node --show-secrets` 现在不会在添加结果里直接内联敏感链接；只会返回后续查看命令，敏感内容统一改为通过独立命令查看
+
+### 添加 TUIC + TLS 节点
+
+使用域名：
+
+```bash
+vps-cli singbox add-tuic-tls \
+  --server example.com \
+  --port 60002 \
+  --self-signed \
+  --confirm
+```
+
+使用 IP + 自签证书：
+
+```bash
+vps-cli singbox add-tuic-tls \
+  --server 1.2.3.4 \
+  --port 60002 \
+  --self-signed \
+  --confirm
+```
+
+说明：
+
+- 当 `--server` 为域名时，默认直接复用该域名作为 `server-name`
+- 当 `--server` 为 IP 且使用 `--self-signed` 时，可以省略 `--server-name`
+- 交互模式下，如果你输入的是 IP，并选择“自动生成自签名证书”，CLI 不会再额外追问 `TLS SNI / 证书域名`
+- 如果你使用现成证书而不是 `--self-signed`，仍建议显式传入 `--server-name`
 
 ### 查看节点列表
 
