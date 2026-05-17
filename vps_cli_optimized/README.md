@@ -54,7 +54,7 @@ sudo install -m 0755 target/release/vps-cli /usr/local/bin/vps-cli
 ### 方式三：使用 GitHub Release 二进制
 
 - 直接下载 GitHub Release 中的压缩包。
-- 当前最新 release 为 `0.3.2`。
+- 当前最新 release 为 `0.3.3`。
 - 发布资产命名规则：
   - `vps-cli-linux-amd64.tar.gz`
   - `vps-cli-linux-arm64.tar.gz`
@@ -69,7 +69,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `amd64 / x86_64`：
 
 ```bash
-curl -fL https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-amd64.tar.gz -o vps-cli-linux-amd64.tar.gz
+curl -fL https://github.com/gray0128/sh/releases/download/v0.3.3/vps-cli-linux-amd64.tar.gz -o vps-cli-linux-amd64.tar.gz
 tar -xzf vps-cli-linux-amd64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -77,7 +77,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `arm64 / aarch64`：
 
 ```bash
-curl -fL https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-arm64.tar.gz -o vps-cli-linux-arm64.tar.gz
+curl -fL https://github.com/gray0128/sh/releases/download/v0.3.3/vps-cli-linux-arm64.tar.gz -o vps-cli-linux-arm64.tar.gz
 tar -xzf vps-cli-linux-arm64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -87,7 +87,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `amd64 / x86_64`：
 
 ```bash
-wget https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-amd64.tar.gz
+wget https://github.com/gray0128/sh/releases/download/v0.3.3/vps-cli-linux-amd64.tar.gz
 tar -xzf vps-cli-linux-amd64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -95,7 +95,7 @@ sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 `arm64 / aarch64`：
 
 ```bash
-wget https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-arm64.tar.gz
+wget https://github.com/gray0128/sh/releases/download/v0.3.3/vps-cli-linux-arm64.tar.gz
 tar -xzf vps-cli-linux-arm64.tar.gz
 sudo install -m 0755 vps-cli /usr/local/bin/vps-cli
 ```
@@ -113,9 +113,9 @@ uname -m
 对应下载地址：
 
 - `amd64`：
-  - [v0.3.2 / vps-cli-linux-amd64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-amd64.tar.gz)
+  - [v0.3.3 / vps-cli-linux-amd64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.3.3/vps-cli-linux-amd64.tar.gz)
 - `arm64`：
-  - [v0.3.2 / vps-cli-linux-arm64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.3.2/vps-cli-linux-arm64.tar.gz)
+  - [v0.3.3 / vps-cli-linux-arm64.tar.gz](https://github.com/gray0128/sh/releases/download/v0.3.3/vps-cli-linux-arm64.tar.gz)
 
 建议：
 
@@ -173,7 +173,7 @@ vps-cli upgrade
 升级到指定版本：
 
 ```bash
-vps-cli upgrade --version 0.3.2
+vps-cli upgrade --version 0.3.3
 ```
 
 如果当前安装路径在系统目录，通常需要：
@@ -557,7 +557,7 @@ vps-cli reclaim trusttunnel-purge --confirm
 
 ## 版本与升级
 
-- 当前 release 最新版本为 `0.3.2`
+- 当前 release 最新版本为 `0.3.3`
 - 顶层已有内建版本输出：
   - `vps-cli --version`
   - `vps-cli version`
